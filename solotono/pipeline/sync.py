@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from solotono.db.models import Entity, EntityHistory, Store
 from solotono.scrapers.base import ScrapedProduct
 from solotono.matching.matcher import ProductMatcher
+from solotono.matching.taxonomy import classify_product
 
 
 class IngestionPipeline:
@@ -59,6 +60,9 @@ class IngestionPipeline:
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             is_new_entity = False
 
+            # Classify into Canonical Category
+            tax_res = classify_product(p.name, raw_category=p.category, brand=p.brand, session=self.session)
+
             if not entity:
                 is_new_entity = True
                 entity = Entity(
@@ -69,6 +73,7 @@ class IngestionPipeline:
                     url=p.url,
                     brand=p.brand,
                     category=p.category,
+                    category_id=tax_res.category_id,
                     part_number=p.part_number,
                     ean=p.ean,
                     condition=p.condition,
@@ -91,6 +96,8 @@ class IngestionPipeline:
                     entity.brand = p.brand
                 if p.category:
                     entity.category = p.category
+                if tax_res.category_id:
+                    entity.category_id = tax_res.category_id
                 if p.part_number:
                     entity.part_number = p.part_number
                 if p.ean:

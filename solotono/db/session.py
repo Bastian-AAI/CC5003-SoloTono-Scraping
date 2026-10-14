@@ -118,12 +118,12 @@ STORE_DEFINITIONS = [
 ]
 
 
-def init_db(prepopulate_stores: bool = True):
-    """Create all tables and optionally seed store definitions."""
+def init_db(prepopulate_stores: bool = True, prepopulate_taxonomy: bool = True):
+    """Create all tables and optionally seed store and taxonomy definitions."""
     Base.metadata.create_all(bind=engine)
 
-    if prepopulate_stores:
-        with get_db_session() as session:
+    with get_db_session() as session:
+        if prepopulate_stores:
             for s_def in STORE_DEFINITIONS:
                 existing = session.query(Store).filter_by(slug=s_def["slug"]).first()
                 if not existing:
@@ -135,3 +135,8 @@ def init_db(prepopulate_stores: bool = True):
                         engine_type=s_def["engine_type"],
                     )
                     session.add(store)
+
+        if prepopulate_taxonomy:
+            from solotono.db.fixtures import seed_taxonomy
+            seed_taxonomy(session)
+

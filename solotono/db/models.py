@@ -1,4 +1,4 @@
-"""SQLAlchemy database models for SoloTono, mirroring SoloTodo's Entity-Product-EntityHistory architecture."""
+"""SQLAlchemy database models for SoloTono, mirroring SoloTodo's Entity-Product-EntityHistory and Section-Category-Subcategory architecture."""
 
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -23,6 +23,83 @@ Base = declarative_base()
 
 def utc_now():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+class Section(Base):
+    """Represents a top-level website section (e.g. 'Categorías en Instrumentos', 'Equipos de Sonido', 'Piezas y Repuestos')."""
+
+    __tablename__ = "sections"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(128), nullable=False)
+    slug = Column(String(64), unique=True, nullable=False, index=True)
+    ordering = Column(Integer, default=0, nullable=False)
+
+    groups = relationship("CategoryGroup", back_populates="section", cascade="all, delete-orphan", order_by="CategoryGroup.ordering")
+
+    def __repr__(self) -> str:
+        return f"<Section {self.name} ({self.slug})>"
+
+
+class CategoryGroup(Base):
+    """Represents a column / family grouping within a section (e.g. 'Cuerda', 'Amplificación', 'Efectos')."""
+
+    __tablename__ = "category_groups"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    section_id = Column(Integer, ForeignKey("sections.id"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    slug = Column(String(64), unique=True, nullable=False, index=True)
+    ordering = Column(Integer, default=0, nullable=False)
+
+    section = relationship("Section", back_populates="groups")
+    categories = relationship("Category", back_populates="group", cascade="all, delete-orphan", order_by="Category.ordering")
+
+    def __repr__(self) -> str:
+        return f"<CategoryGroup {self.name} ({self.slug})>"
+
+
+class Category(Base):
+    """Represents a canonical, spec-defining product category (mirroring SoloTodo's Category)."""
+
+    __tablename__ = "categories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    group_id = Column(Integer, ForeignKey("category_groups.id"), nullable=True, index=True)
+    name = Column(String(128), nullable=False)
+    slug = Column(String(64), unique=True, nullable=False, index=True)
+    ordering = Column(Integer, default=0, nullable=False)
+    short_description_template = Column(Text, nullable=True)
+    browse_result_template = Column(Text, nullable=True)
+    detail_template = Column(Text, nullable=True)
+    meta_tag_description = Column(Text, nullable=True)
+
+    group = relationship("CategoryGroup", back_populates="categories")
+    subcategories = relationship("Subcategory", back_populates="category", cascade="all, delete-orphan", order_by="Subcategory.ordering")
+    products = relationship("Product", back_populates="category_obj")
+    entities = relationship("Entity", back_populates="category_obj")
+
+    def __repr__(self) -> str:
+        return f"<Category {self.name} ({self.slug})>"
+
+
+class Subcategory(Base):
+    """Virtual view / parameterized facet on a Category (mirroring SoloTodo's Subcategory)."""
+
+    __tablename__ = "subcategories"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=False, index=True)
+    name = Column(String(128), nullable=False)
+    slug = Column(String(64), unique=True, nullable=False, index=True)
+    params = Column(String(256), default="", nullable=False)  # e.g. "strings_min=7" or "technology=tubes"
+    ordering = Column(Integer, default=0, nullable=False)
+    meta_tag_description = Column(Text, nullable=True)
+
+    category = relationship("Category", back_populates="subcategories")
+
+    def __repr__(self) -> str:
+        return f"<Subcategory {self.name} ({self.slug}): params='{self.params}'>"
 
 
 class Store(Base):
@@ -51,9 +128,10 @@ class Product(Base):
     __tablename__ = "products"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True, index=True)
+    category = Column(String(128), nullable=True, index=True)  # Legacy string representation / quick access
     name = Column(String(256), nullable=False, index=True)
     brand = Column(String(128), nullable=False, index=True)
-    category = Column(String(128), nullable=False, index=True)
     family = Column(String(128), nullable=True)  # e.g. Stratocaster, Les Paul, SM58, Scarlett
     part_number = Column(String(64), nullable=True, index=True)  # Manufacturer Part Number (MPN)
     ean = Column(String(32), nullable=True, index=True)  # Barcode (EAN-13 / GTIN)
@@ -63,6 +141,7 @@ class Product(Base):
     created_at = Column(DateTime, default=utc_now, nullable=False)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
 
+    category_obj = relationship("Category", back_populates="products")
     entities = relationship("Entity", back_populates="product")
 
     def __repr__(self) -> str:
@@ -83,6 +162,7 @@ class Entity(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     store_id = Column(Integer, ForeignKey("stores.id"), nullable=False, index=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True, index=True)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True, index=True)
 
     # Identifiers from store
     key = Column(String(256), nullable=False)  # Store internal unique product/variant key
@@ -90,7 +170,7 @@ class Entity(Base):
     name = Column(String(256), nullable=False)  # Raw scraped title
     url = Column(String(512), nullable=False)
     brand = Column(String(128), nullable=True)
-    category = Column(String(128), nullable=True)
+    category = Column(String(128), nullable=True)  # Raw category string from store
     part_number = Column(String(128), nullable=True, index=True)
     ean = Column(String(32), nullable=True, index=True)
     condition = Column(String(64), default="New", nullable=False)  # New, Used, Refurbished, OpenBox
@@ -111,6 +191,7 @@ class Entity(Base):
     # Relationships
     store = relationship("Store", back_populates="entities")
     product = relationship("Product", back_populates="entities")
+    category_obj = relationship("Category", back_populates="entities")
     histories = relationship("EntityHistory", foreign_keys="EntityHistory.entity_id", back_populates="entity", cascade="all, delete-orphan")
     active_registry = relationship("EntityHistory", foreign_keys=[active_registry_id], post_update=True)
 

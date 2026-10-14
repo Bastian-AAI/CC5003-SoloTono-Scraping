@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from solotono.config import MATCH_FUZZY_THRESHOLD, MATCH_PENDING_THRESHOLD
 from solotono.db.models import Entity, Product
 from solotono.matching.normalizer import analyze_product_string, strip_accents
+from solotono.matching.taxonomy import classify_product
 
 
 @dataclass
@@ -131,10 +132,13 @@ class ProductMatcher:
         if auto_create_canonical and brand:
             # Clean title for canonical catalog
             canonical_name = entity.name.replace("®", "").replace("™", "").strip()
+            tax_res = classify_product(canonical_name, raw_category=entity.category, brand=brand, session=self.session)
+
             new_prod = Product(
                 name=canonical_name,
                 brand=brand,
-                category=entity.category or "Instrumentos",
+                category_id=tax_res.category_id,
+                category=tax_res.category_name or entity.category or "Guitarras Eléctricas",
                 part_number=mpn,
                 ean=ean,
                 picture_url=entity.picture_urls.split(",")[0] if entity.picture_urls else None,
@@ -143,6 +147,8 @@ class ProductMatcher:
             self.session.flush()  # Generate new_prod.id
 
             entity.product_id = new_prod.id
+            if tax_res.category_id:
+                entity.category_id = tax_res.category_id
             entity.is_associated = True
             return MatchResult(
                 entity_id=entity.id,

@@ -91,10 +91,47 @@ La persistencia está construida sobre **SQLAlchemy**, configurada por defecto p
 
 ```mermaid
 erDiagram
+    SECTION ||--o{ CATEGORY_GROUP : "contiene columnas"
+    CATEGORY_GROUP ||--o{ CATEGORY : "agrupa"
+    CATEGORY ||--o{ SUBCATEGORY : "vistas parametrizadas"
+    CATEGORY ||--o{ PRODUCT : "clasifica"
+    CATEGORY ||--o{ ENTITY : "asigna"
     STORE ||--o{ ENTITY : "publica"
     PRODUCT ||--o{ ENTITY : "agrupa precios de"
     ENTITY ||--o{ ENTITY_HISTORY : "registra cambios en"
     ENTITY ||--o| ENTITY_HISTORY : "active_registry (puntero O(1))"
+
+    SECTION {
+        int id PK
+        string name
+        string slug UK
+        int ordering
+    }
+
+    CATEGORY_GROUP {
+        int id PK
+        int section_id FK
+        string name
+        string slug UK
+        int ordering
+    }
+
+    CATEGORY {
+        int id PK
+        int group_id FK
+        string name
+        string slug UK
+        string short_description_template
+        string browse_result_template
+    }
+
+    SUBCATEGORY {
+        int id PK
+        int category_id FK
+        string name
+        string slug UK
+        string params "e.g. strings_min=7"
+    }
 
     STORE {
         int id PK
@@ -109,6 +146,7 @@ erDiagram
 
     PRODUCT {
         int id PK
+        int category_id FK
         string name
         string brand
         string category
@@ -126,12 +164,13 @@ erDiagram
         int id PK
         int store_id FK
         int product_id FK "nullable"
+        int category_id FK "nullable"
         string key "único por tienda"
         string sku
         string name
         string url
         string brand
-        string category
+        string category "categoría original tienda"
         string part_number
         string ean
         string condition
@@ -158,7 +197,27 @@ erDiagram
 
 ---
 
-## 4. Algoritmo de Product Matching
+## 4. Arquitectura de Categorización y Mega-Menú (Estilo SoloTodo)
+
+A partir de la ingeniería inversa sobre `api.solotodo.com`, SoloTono replica y adapta la estrategia de **Taxonomía Facetada Desacoplada** de SoloTodo:
+
+1. **Jerarquía Desacoplada en 4 Niveles**:
+   * **`Section` (Secciones Superiores)**: Macro-áreas de navegación (`Categorías en Instrumentos`, `Categorías en Equipos de Sonido`, `Categorías en Piezas y Repuestos`).
+   * **`CategoryGroup` (Columnas del Menú)**: Familias de productos (ej. `Cuerda`, `Aire`, `Percusión`, `Teclas`, `Amplificación`, `Efectos`, etc.).
+   * **`Category` (Categorías Canónicas)**: Fichas técnicas base fuertemente tipadas (ej. `Guitarras Eléctricas`, `Amplificadores de Guitarra`, `Interfaces de Audio`). Cada una define sus plantillas Handlebars de especificaciones técnicas (`short_description_template` y `browse_result_template`).
+   * **`Subcategory` (Vistas Virtuales Parametrizadas)**: Lo que el usuario ve como filtros preconfigurados en el menú (**NO son tablas separadas**, sino búsquedas guardadas con parámetros técnicos `params`):
+     * *Guitarras Eléctricas*: `7 o más cuerdas` (`strings_min=7`), `Para Zurdos` (`is_left_handed=1`), `Stratocaster` (`body_shape=stratocaster`), `Les Paul` (`body_shape=les_paul`).
+     * *Amplificadores de Guitarra*: `Valvulares / A tubos` (`tech=tubes`), `Digitales / Modelado` (`tech=digital`).
+     * *Pedales de Efectos*: `Overdrive & Distorsión` (`effect=overdrive,distortion`), `Delay & Reverb` (`effect=delay,reverb`).
+     * *Micrófonos de Estudio*: `Condensador` (`transducer=condenser`), `Dinámicos` (`transducer=dynamic`).
+
+2. **Clasificador Taxonómico Híbrido (`solotono.matching.taxonomy`)**:
+   - Analiza el título crudo, categoría de la tienda y marca con reglas ponderadas y exclusión de falsos positivos (ej. distingue entre una guitarra de 7 cuerdas y un juego de cuerdas).
+   - Extrae automáticamente los parámetros facetados correspondientes a las subcategorías.
+
+---
+
+## 5. Algoritmo de Product Matching
 
 En el rubro de instrumentos musicales, los nombres difieren drásticamente entre comercios (ej. *"Guitarra Eléctrica Fender Player Stratocaster MN Black"* vs *"Fender Player Strat MN BLK"* vs *"Fender Stratocaster Player Series Maple Negra"*).
 
@@ -192,7 +251,7 @@ flowchart LR
 
 ---
 
-## 5. Instalación y Requisitos
+## 6. Instalación y Requisitos
 
 ### Requisitos del Sistema
 - Python 3.10 o superior (compatible con Python 3.11, 3.12, 3.13 y 3.14).
@@ -225,23 +284,39 @@ flowchart LR
 
 ---
 
-## 6. Guía de Uso de la CLI
+## 7. Guía de Uso de la CLI
 
 El módulo incluye una interfaz de línea de comandos rica e interactiva (`solotono`):
 
-### 1. Demostración Rápida End-to-End
-Ejecuta un ciclo completo de scraping sobre las 11 tiendas (límite configurable de productos por tienda), procesa los deltas de precios, corre el Product Matching y despliega una tabla comparativa con las mejores ofertas:
+### 1. Visualizar o Exportar el Mega-Menú de Categorías (Estilo SoloTodo)
+- Renderizar en consola las 3 secciones y 12 columnas:
+  ```bash
+  python -m solotono menu
+  ```
+- Exportar la estructura completa a JSON para ser consumida directamente por un frontend en React/Next.js:
+  ```bash
+  python -m solotono menu --json
+  ```
+
+### 2. Clasificar Entidades hacia Categorías Canónicas
+Ejecuta el clasificador taxonómico sobre los productos extraídos por los scrapers:
+```bash
+python -m solotono classify --limit 30
+```
+
+### 3. Demostración Rápida End-to-End
+Ejecuta un ciclo completo de scraping sobre las 11 tiendas, procesa deltas de precio, corre matching y despliega la tabla de ofertas líderes:
 ```bash
 python -m solotono demo --limit 2
 ```
 
-### 2. Ver Estadísticas del Sistema
+### 4. Ver Estadísticas del Sistema
 Muestra el resumen global de tiendas, catálogo canónico, entidades registradas, tasa de asociación y total de registros históricos:
 ```bash
 python -m solotono stats
 ```
 
-### 3. Ejecutar Scraping Específico o Masivo
+### 5. Ejecutar Scraping Específico o Masivo
 - Scrapear una tienda individual (ej. Audiomusica):
   ```bash
   python -m solotono scrape --store audiomusica --limit 20
@@ -251,13 +326,13 @@ python -m solotono stats
   python -m solotono scrape --limit 10
   ```
 
-### 4. Ejecutar el Motor de Product Matching
+### 6. Ejecutar el Motor de Product Matching
 Procesa las entidades que están en la cola de pendientes:
 ```bash
 python -m solotono match --threshold 0.85
 ```
 
-### 5. Inspeccionar y Resolver la Cola de Pendientes
+### 7. Inspeccionar y Resolver la Cola de Pendientes
 - Ver productos pendientes de asociación manual:
   ```bash
   python -m solotono pending --limit 15
@@ -267,7 +342,7 @@ python -m solotono match --threshold 0.85
   python -m solotono pending --associate 12 3
   ```
 
-### 6. Consultar el Historial de Precios de un Producto
+### 8. Consultar el Historial de Precios de un Producto
 Muestra los precios vigentes en cada tienda (gracias a `active_registry`) y la serie temporal completa de fluctuaciones:
 ```bash
 python -m solotono history 1
@@ -275,7 +350,7 @@ python -m solotono history 1
 
 ---
 
-## 7. Uso Programático como Librería en Python
+## 8. Uso Programático como Librería en Python
 
 SoloTono puede ser importado directamente en cualquier backend (FastAPI, Django, Flask o scripts de cron):
 
@@ -290,14 +365,14 @@ from solotono import (
     Entity,
 )
 
-# 1. Inicializar la base de datos y tiendas
+# 1. Inicializar la base de datos, tiendas y taxonomía completa
 init_db()
 
 # 2. Scrapear productos de una tienda específica
 scraper_cls = get_scraper_by_slug("audiomusica")
 scraped_products = scraper_cls.scrape_all(limit=10)
 
-# 3. Ingestar y registrar historial con compresión por deltas
+# 3. Ingestar, clasificar y registrar historial con compresión por deltas
 with get_db_session() as session:
     pipeline = IngestionPipeline(session, auto_match=True, auto_create_canonical=True)
     stats = pipeline.process_scraped_products(scraped_products)
@@ -314,7 +389,7 @@ with get_db_session() as session:
 
 ---
 
-## 8. Estructura del Proyecto
+## 9. Estructura del Proyecto
 
 ```
 CC5003-SoloTono-Scraping/

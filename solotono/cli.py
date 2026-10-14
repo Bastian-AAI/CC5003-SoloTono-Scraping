@@ -10,9 +10,11 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from solotono.db.models import Entity, EntityHistory, Product, Store
+import json
+from solotono.db.models import Entity, EntityHistory, Product, Store, Section, CategoryGroup, Category, Subcategory
 from solotono.db.session import get_db_session, init_db
 from solotono.matching.matcher import ProductMatcher
+from solotono.matching.taxonomy import classify_product
 from solotono.pipeline.sync import IngestionPipeline
 from solotono.scrapers.stores import SCRAPER_REGISTRY, get_scraper_by_slug
 
@@ -298,12 +300,137 @@ def cmd_demo(args):
         console.print("[dim]Usa [bold]python -m solotono history <id>[/bold] para ver el desglose e historial temporal completo de un producto.[/dim]\n")
 
 
+def cmd_menu(args):
+    """Display or export the complete SoloTodo-style Mega-Menu taxonomy."""
+    init_db(prepopulate_stores=True, prepopulate_taxonomy=True)
+
+    with get_db_session() as session:
+        sections = session.query(Section).order_by(Section.ordering).all()
+
+        if args.json:
+            export_data = []
+            for sec in sections:
+                sec_dict = {
+                    "id": sec.id,
+                    "name": sec.name,
+                    "slug": sec.slug,
+                    "groups": []
+                }
+                for grp in sec.groups:
+                    grp_dict = {
+                        "id": grp.id,
+                        "name": grp.name,
+                        "slug": grp.slug,
+                        "categories": []
+                    }
+                    for cat in grp.categories:
+                        cat_dict = {
+                            "id": cat.id,
+                            "name": cat.name,
+                            "slug": cat.slug,
+                            "subcategories": [
+                                {
+                                    "id": sub.id,
+                                    "name": sub.name,
+                                    "slug": sub.slug,
+                                    "params": sub.params,
+                                }
+                                for sub in cat.subcategories
+                            ]
+                        }
+                        grp_dict["categories"].append(cat_dict)
+                    sec_dict["groups"].append(grp_dict)
+                export_data.append(sec_dict)
+            print(json.dumps(export_data, indent=2, ensure_ascii=False))
+            return
+
+        console.print(Panel(
+            "[bold orange3]🎸 Mega-Menú de Categorización SoloTono (Arquitectura SoloTodo)[/bold orange3]\n"
+            "[dim]Organizado en Secciones > Grupos (Columnas) > Categorías Canónicas > Subcategorías (Filtros)[/dim]",
+            title="Estructura de Navegación del Catálogo"
+        ))
+
+        for sec in sections:
+            console.print(f"\n[bold dark_orange]{sec.name.upper()}[/bold dark_orange]")
+            table = Table(show_header=True, header_style="bold cyan", border_style="dim")
+            
+            for grp in sec.groups:
+                table.add_column(grp.name, style="white", min_width=25)
+
+            # Max categories in any group of this section
+            max_cats = max(len(grp.categories) for grp in sec.groups) if sec.groups else 0
+
+            for i in range(max_cats):
+                row = []
+                for grp in sec.groups:
+                    if i < len(grp.categories):
+                        cat = grp.categories[i]
+                        sub_count = len(cat.subcategories)
+                        badge = f" [dim]({sub_count} vistas)[/dim]" if sub_count > 0 else ""
+                        row.append(f"{cat.name}{badge}")
+                    else:
+                        row.append("")
+                table.add_row(*row)
+
+            # Footer "Ver todos" row like SoloTodo screenshots
+            table.add_row(*["[bold orange3]Ver todos[/bold orange3]" for _ in sec.groups])
+            console.print(table)
+
+
+def cmd_classify(args):
+    """Run taxonomic classification on store entities."""
+    init_db(prepopulate_stores=True, prepopulate_taxonomy=True)
+
+    with get_db_session() as session:
+        query = session.query(Entity)
+        if not args.all:
+            query = query.filter(Entity.category_id == None)
+        entities = query.limit(args.limit).all()
+
+        console.print(f"[bold cyan]Clasificando {len(entities)} entidades con el clasificador taxonómico...[/bold cyan]")
+
+        table = Table(title="Clasificación Taxonómica de Entidades", show_header=True, header_style="bold green")
+        table.add_column("ID", style="dim", justify="right")
+        table.add_column("Tienda", style="cyan")
+        table.add_column("Título Crudo")
+        table.add_column("Categoría Canónica Asignada", style="bold green")
+        table.add_column("Confianza", justify="right")
+        table.add_column("Facets / Subcats", style="yellow")
+
+        for ent in entities:
+            res = classify_product(ent.name, raw_category=ent.category, brand=ent.brand, session=session)
+            if res.category_id:
+                ent.category_id = res.category_id
+            subcat_str = ", ".join(res.suggested_subcategories) if res.suggested_subcategories else "-"
+            table.add_row(
+                str(ent.id),
+                ent.store.name if ent.store else "-",
+                ent.name[:38],
+                res.category_name or res.category_slug,
+                f"{res.confidence * 100:.0f}%",
+                subcat_str,
+            )
+
+        session.commit()
+        console.print(table)
+        console.print(f"[bold green]✓ Clasificación completada para {len(entities)} entidades.[/bold green]")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="solotono",
         description="SoloTono: Motor de Scraping, Product Matching e Historial de Precios de Instrumentos Musicales en Chile.",
     )
     subparsers = parser.add_subparsers(dest="command", help="Comandos disponibles")
+
+    # Command: menu
+    p_menu = subparsers.add_parser("menu", help="Visualizar o exportar el mega-menú de categorías estilo SoloTodo")
+    p_menu.add_argument("--json", action="store_true", help="Exportar estructura jerárquica en formato JSON")
+
+    # Command: classify
+    p_classify = subparsers.add_parser("classify", help="Clasificar entidades hacia categorías canónicas")
+    p_classify.add_argument("--limit", type=int, default=50, help="Límite de entidades a clasificar")
+    p_classify.add_argument("--all", action="store_true", help="Reclasificar todas las entidades, incluso las ya asignadas")
 
     # Command: demo
     p_demo = subparsers.add_parser("demo", help="Ejecutar demo end-to-end rápido")
@@ -341,6 +468,8 @@ def main():
         sys.exit(0)
 
     commands = {
+        "menu": cmd_menu,
+        "classify": cmd_classify,
         "demo": cmd_demo,
         "stats": cmd_stats,
         "scrape": cmd_scrape,
@@ -354,3 +483,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
