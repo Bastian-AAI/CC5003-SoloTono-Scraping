@@ -8,13 +8,21 @@ from sqlalchemy.orm import sessionmaker, Session
 from solotono.config import DATABASE_URL
 from solotono.db.models import Base, Store
 
-# SQLite foreign key enforcement and connect args
+# Connection URL normalization and args
+db_url = DATABASE_URL
 connect_args = {}
-if DATABASE_URL.startswith("sqlite"):
+
+if db_url.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
+elif db_url.startswith("postgresql://"):
+    try:
+        import psycopg2
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    except ImportError:
+        pass
 
 engine = create_engine(
-    DATABASE_URL,
+    db_url,
     connect_args=connect_args,
     echo=False,
     future=True,

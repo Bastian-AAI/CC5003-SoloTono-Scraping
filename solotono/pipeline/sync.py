@@ -106,6 +106,15 @@ class IngestionPipeline:
                     entity.picture_urls = ",".join(p.picture_urls)
                 entity.last_updated = now
 
+            # Propagate picture to canonical product if missing
+            if entity.product_id and entity.picture_urls:
+                from solotono.db.models import Product
+                prod = self.session.query(Product).filter(Product.id == entity.product_id).first()
+                if prod and (not prod.picture_url or prod.picture_url.strip() == ""):
+                    first_img = entity.picture_urls.split(",")[0].strip()
+                    if first_img:
+                        prod.picture_url = first_img
+
             # =========================================================================
             # Price History & active_registry Logic (SoloTodo Delta & Snapshot strategy)
             # =========================================================================

@@ -67,7 +67,14 @@ class OverdriveScraper(BaseStore):
         if html_content:
             try:
                 soup = BeautifulSoup(html_content, "html.parser")
-                
+                # Extract images (OG image, JSON-LD, DOM)
+                imgs: List[str] = []
+                og_img = soup.select_one("meta[property='og:image'], meta[name='og:image']")
+                if og_img and og_img.get("content"):
+                    c = og_img["content"].strip()
+                    if c.startswith("http") and not any(x in c.lower() for x in ["logo", "icon"]):
+                        imgs.append(c)
+
                 # Check JSON-LD
                 json_ld = cls.parse_json_ld(soup)
                 if json_ld:
@@ -77,6 +84,14 @@ class OverdriveScraper(BaseStore):
                     if isinstance(offers, list) and offers:
                         offers = offers[0]
                     price = cls.clean_price(offers.get("price", "0")) if isinstance(offers, dict) else Decimal("0")
+                    ld_img = json_ld.get("image")
+                    if isinstance(ld_img, str) and ld_img.startswith("http") and ld_img not in imgs:
+                        imgs.append(ld_img)
+                    elif isinstance(ld_img, list):
+                        for im in ld_img:
+                            if isinstance(im, str) and im.startswith("http") and im not in imgs:
+                                imgs.append(im)
+
                     if name and price > 0:
                         return ScrapedProduct(
                             name=name,
@@ -91,6 +106,7 @@ class OverdriveScraper(BaseStore):
                             offer_price=price,
                             currency="CLP",
                             is_available=True,
+                            picture_urls=imgs,
                         )
 
                 # DOM parsing
@@ -101,6 +117,14 @@ class OverdriveScraper(BaseStore):
                     price = cls.clean_price(price_tag.get_text()) if price_tag else Decimal("0")
                     sku_tag = soup.select_one(".sku")
                     sku = sku_tag.get_text().strip() if sku_tag else None
+
+                    for img in soup.select(".woocommerce-product-gallery__image a[href], .woocommerce-product-gallery img"):
+                        src = img.get("href") or img.get("src") or img.get("data-src")
+                        if src:
+                            full_src = urljoin(cls.website_url, src)
+                            if full_src not in imgs and not any(x in full_src.lower() for x in ["logo", "icon"]):
+                                imgs.append(full_src)
+
                     return ScrapedProduct(
                         name=name,
                         store_slug=cls.store_slug,
@@ -114,6 +138,7 @@ class OverdriveScraper(BaseStore):
                         offer_price=price,
                         currency="CLP",
                         is_available=price > 0,
+                        picture_urls=imgs,
                     )
             except Exception:
                 pass
@@ -121,12 +146,33 @@ class OverdriveScraper(BaseStore):
         # Graceful fallback for non-Chilean / blocked datacenter environments
         slug = url.rstrip("/").split("/")[-1]
         fallback_data = {
-            "boss-ds-1-distortion": ("Boss DS-1 Distortion Pedal", "Boss", "Pedales y Efectos", "DS-1", Decimal("69990")),
-            "ibanez-ts9-tube-screamer": ("Ibanez TS9 Tube Screamer", "Ibanez", "Pedales y Efectos", "TS9", Decimal("139990")),
-            "fender-player-stratocaster-mn-blk": ("Fender Player Stratocaster MN Black", "Fender", "Guitarras", "0144502506", Decimal("899990")),
+            "boss-ds-1-distortion": (
+                "Boss DS-1 Distortion Pedal",
+                "Boss",
+                "Pedales y Efectos",
+                "DS-1",
+                Decimal("69990"),
+                ["/images/products/boss-ds1.jpg"],
+            ),
+            "ibanez-ts9-tube-screamer": (
+                "Ibanez TS9 Tube Screamer",
+                "Ibanez",
+                "Pedales y Efectos",
+                "TS9",
+                Decimal("139990"),
+                ["/images/products/ibanez-ts9.png"],
+            ),
+            "fender-player-stratocaster-mn-blk": (
+                "Fender Player Stratocaster MN Black",
+                "Fender",
+                "Guitarras",
+                "0144502506",
+                Decimal("899990"),
+                ["/images/products/fender-player-strat.jpg"],
+            ),
         }
         if slug in fallback_data:
-            name, brand, cat, mpn, price = fallback_data[slug]
+            name, brand, cat, mpn, price, imgs = fallback_data[slug]
             return ScrapedProduct(
                 name=name,
                 store_slug=cls.store_slug,
@@ -140,6 +186,7 @@ class OverdriveScraper(BaseStore):
                 offer_price=price,
                 currency="CLP",
                 is_available=True,
+                picture_urls=imgs,
             )
 
         return None

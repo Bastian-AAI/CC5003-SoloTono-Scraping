@@ -40,25 +40,35 @@ class FactorySoundScraper(BaseStore):
         urls: List[str] = []
 
         for path in cls.category_paths:
-            cat_url = urljoin(cls.website_url, path)
-            try:
-                r = session.get(cat_url, timeout=15)
-                if r.status_code != 200:
-                    continue
+            page = 1
+            while True:
+                cat_url = urljoin(cls.website_url, f"{path}?page={page}") if page > 1 else urljoin(cls.website_url, path)
+                try:
+                    r = session.get(cat_url, timeout=15)
+                    if r.status_code != 200:
+                        break
 
-                soup = BeautifulSoup(r.text, "html.parser")
-                # Prestashop 1.7 / 8 product card selectors
-                cards = soup.select(".product-miniature a.product-thumbnail, .product-title a, article.product-miniature a[href]")
-                for a in cards:
-                    href = a.get("href")
-                    if href and href.startswith("http") and href not in urls:
-                        if any(x in href for x in ["order", "cart", "controller"]):
-                            continue
-                        urls.append(href)
-                        if limit and len(urls) >= limit:
-                            return urls
-            except Exception:
-                continue
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    cards = soup.select(".product-miniature a.product-thumbnail, .product-title a, article.product-miniature a[href]")
+                    if not cards:
+                        break
+
+                    new_on_page = 0
+                    for a in cards:
+                        href = a.get("href")
+                        if href and href.startswith("http") and href not in urls:
+                            if any(x in href for x in ["order", "cart", "controller"]):
+                                continue
+                            urls.append(href)
+                            new_on_page += 1
+                            if limit and len(urls) >= limit:
+                                return urls
+
+                    if new_on_page == 0 or (limit and len(urls) >= limit):
+                        break
+                    page += 1
+                except Exception:
+                    break
 
         return urls
 
@@ -72,6 +82,14 @@ class FactorySoundScraper(BaseStore):
 
             soup = BeautifulSoup(r.text, "html.parser")
 
+            # Extract images (og:image, JSON-LD, DOM)
+            images: List[str] = []
+            og_img = soup.select_one("meta[property='og:image'], meta[name='og:image']")
+            if og_img and og_img.get("content"):
+                c = og_img["content"].strip()
+                if c.startswith("http") and not any(x in c.lower() for x in ["logo", "icon", "banner"]):
+                    images.append(c)
+
             # Try JSON-LD first
             json_ld = cls.parse_json_ld(soup)
             if json_ld:
@@ -81,6 +99,15 @@ class FactorySoundScraper(BaseStore):
                 if isinstance(offers, list) and offers:
                     offers = offers[0]
                 price = cls.clean_price(offers.get("price", "0")) if isinstance(offers, dict) else Decimal("0")
+                
+                ld_img = json_ld.get("image")
+                if isinstance(ld_img, str) and ld_img.startswith("http") and ld_img not in images:
+                    images.append(ld_img)
+                elif isinstance(ld_img, list):
+                    for im in ld_img:
+                        if isinstance(im, str) and im.startswith("http") and im not in images:
+                            images.append(im)
+
                 if name and price > 0:
                     return ScrapedProduct(
                         name=name,
@@ -96,6 +123,7 @@ class FactorySoundScraper(BaseStore):
                         currency="CLP",
                         stock=1,
                         is_available=True,
+                        picture_urls=images,
                     )
 
             # Fallback to DOM
@@ -111,7 +139,12 @@ class FactorySoundScraper(BaseStore):
             ref_tag = soup.select_one(".product-reference span, span[itemprop='sku']")
             sku = ref_tag.get_text().strip() if ref_tag else None
 
-            images = [img["src"] for img in soup.select(".product-cover img, .js-qv-product-cover") if img.get("src")]
+            for img in soup.select(".product-cover img, .js-qv-product-cover, img[src*='product_zoom'], img[src*='home_default']"):
+                src = img.get("src") or img.get("data-src")
+                if src:
+                    full_src = urljoin(cls.website_url, src)
+                    if full_src not in images and not any(x in full_src.lower() for x in ["logo", "icon"]):
+                        images.append(full_src)
 
             return ScrapedProduct(
                 name=name,

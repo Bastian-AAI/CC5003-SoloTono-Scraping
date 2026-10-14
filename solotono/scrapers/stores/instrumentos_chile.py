@@ -33,21 +33,33 @@ class InstrumentosChileScraper(BaseStore):
         urls: List[str] = []
 
         for path in cls.category_paths:
-            cat_url = urljoin(cls.website_url, path)
-            try:
-                r = session.get(cat_url, timeout=15)
-                if r.status_code != 200:
-                    continue
+            page = 1
+            while True:
+                cat_url = urljoin(cls.website_url, f"{path}?page={page}") if page > 1 else urljoin(cls.website_url, path)
+                try:
+                    r = session.get(cat_url, timeout=15)
+                    if r.status_code != 200:
+                        break
 
-                soup = BeautifulSoup(r.text, "html.parser")
-                for a in soup.select("a[href*='/product/']"):
-                    href = urljoin(cls.website_url, a["href"])
-                    if href not in urls:
-                        urls.append(href)
-                        if limit and len(urls) >= limit:
-                            return urls
-            except Exception:
-                continue
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    links = soup.select("a[href*='/product/']")
+                    if not links:
+                        break
+
+                    new_on_page = 0
+                    for a in links:
+                        href = urljoin(cls.website_url, a["href"])
+                        if href not in urls:
+                            urls.append(href)
+                            new_on_page += 1
+                            if limit and len(urls) >= limit:
+                                return urls
+
+                    if new_on_page == 0 or (limit and len(urls) >= limit):
+                        break
+                    page += 1
+                except Exception:
+                    break
 
         return urls
 
@@ -74,6 +86,21 @@ class InstrumentosChileScraper(BaseStore):
             if "sku-" in key:
                 sku = key.split("sku-")[-1]
 
+            # Extract images (og:image, gallery, product images)
+            imgs = []
+            og_img = soup.select_one("meta[property='og:image'], meta[name='og:image']")
+            if og_img and og_img.get("content"):
+                c = og_img["content"].strip()
+                if c.startswith("http") and not any(x in c.lower() for x in ["logo", "icon", "banner"]):
+                    imgs.append(c)
+
+            for img in soup.select(".bs-product-gallery img, .product-images img, img[src*='/product/']"):
+                src = img.get("src") or img.get("data-src")
+                if src:
+                    full_src = urljoin(cls.website_url, src)
+                    if full_src not in imgs and not any(x in full_src.lower() for x in ["logo", "icon", "placeholder"]):
+                        imgs.append(full_src)
+
             return ScrapedProduct(
                 name=name,
                 store_slug=cls.store_slug,
@@ -87,6 +114,7 @@ class InstrumentosChileScraper(BaseStore):
                 offer_price=price,
                 currency="CLP",
                 is_available=price > 0,
+                picture_urls=imgs,
             )
         except Exception:
             return None

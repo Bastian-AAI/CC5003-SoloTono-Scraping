@@ -34,26 +34,35 @@ class MagentoBaseStore(BaseStore):
         paths_to_crawl = cls.category_paths
 
         for path in paths_to_crawl:
-            cat_url = urljoin(cls.website_url, path)
-            try:
-                r = session.get(cat_url, timeout=15)
-                if r.status_code != 200:
-                    continue
+            page = 1
+            while True:
+                cat_url = urljoin(cls.website_url, f"{path}?p={page}") if page > 1 else urljoin(cls.website_url, path)
+                try:
+                    r = session.get(cat_url, timeout=15)
+                    if r.status_code != 200:
+                        break
 
-                soup = BeautifulSoup(r.text, "html.parser")
-                # Common Magento 1 and 2 product item selectors
-                items = soup.select(".product-item-link, a.product.photo, .product-item a[href], h2.product-name a, .product-name a, a.product-image")
-                for item in items:
-                    href = item.get("href")
-                    if href and href.startswith("http") and href not in urls:
-                        # Avoid cart/checkout/wishlist links
-                        if any(x in href for x in ["checkout", "cart", "customer", "wishlist", "#"]):
-                            continue
-                        urls.append(href)
-                        if limit and len(urls) >= limit:
-                            return urls
-            except Exception:
-                continue
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    items = soup.select(".product-item-link, a.product.photo, .product-item a[href], h2.product-name a, .product-name a, a.product-image")
+                    if not items:
+                        break
+
+                    new_on_page = 0
+                    for item in items:
+                        href = item.get("href")
+                        if href and href.startswith("http") and href not in urls:
+                            if any(x in href for x in ["checkout", "cart", "customer", "wishlist", "#"]):
+                                continue
+                            urls.append(href)
+                            new_on_page += 1
+                            if limit and len(urls) >= limit:
+                                return urls
+
+                    if new_on_page == 0 or (limit and len(urls) >= limit):
+                        break
+                    page += 1
+                except Exception:
+                    break
 
         return urls
 
@@ -87,6 +96,10 @@ class MagentoBaseStore(BaseStore):
                 images = json_ld.get("image", [])
                 if isinstance(images, str):
                     images = [images]
+                if not images:
+                    og_img = soup.select_one("meta[property='og:image'], meta[name='og:image']")
+                    if og_img and og_img.get("content"):
+                        images = [og_img["content"].strip()]
 
                 if name and price > 0:
                     return ScrapedProduct(
@@ -135,8 +148,26 @@ class MagentoBaseStore(BaseStore):
             if stock_tag and "unavailable" in stock_tag.get("class", []):
                 is_avail = False
 
-            # Images
-            imgs = [img["src"] for img in soup.select(".gallery-placeholder img, .fotorama__img") if img.get("src")]
+            # Images (Magento 1 and 2: OG, fotorama, gallery, product-image, catalog/product)
+            imgs: List[str] = []
+            og_img = soup.select_one("meta[property='og:image'], meta[name='og:image']")
+            if og_img and og_img.get("content"):
+                c = og_img["content"].strip()
+                if c.startswith("http") and not any(x in c.lower() for x in ["logo", "banner"]):
+                    imgs.append(c)
+
+            for img in soup.select(".product-image img, .product-img-box img, .product-media img, #image, #image-main, img[src*='/media/catalog/product/'], .gallery-placeholder img, .fotorama__img"):
+                src = img.get("src") or img.get("data-src")
+                if src:
+                    full_src = urljoin(cls.website_url, src)
+                    if full_src not in imgs and not any(x in full_src.lower() for x in ["thumbnail/56x56", "thumbnail/80x80", "logo", "icon"]):
+                        imgs.append(full_src)
+
+            if not imgs:
+                found = re.findall(r'https?://[^\s\"\'<>]*/media/catalog/product/(?:cache/1/image/[^\s\"\'<>]+|[^/]+/[^/]+/[^\s\"\'<>]+)', r.text)
+                for f_url in set(found):
+                    if not any(x in f_url for x in ["56x56", "80x80"]):
+                        imgs.append(f_url)
 
             return ScrapedProduct(
                 name=name,

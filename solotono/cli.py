@@ -56,6 +56,13 @@ def cmd_stats(args):
         console.print(table)
 
 
+def cmd_init_db(args):
+    """Initialize database tables and seed taxonomy and store definitions."""
+    console.print("[bold blue]Inicializando esquema de base de datos y fixtures...[/bold blue]")
+    init_db(prepopulate_stores=True, prepopulate_taxonomy=True)
+    console.print("[bold green]✓ Base de datos inicializada exitosamente con tiendas y taxonomía.[/bold green]")
+
+
 def cmd_scrape(args):
     """Run scraping for a specific store or all stores."""
     init_db(prepopulate_stores=True)
@@ -456,6 +463,9 @@ def main():
     p_pending.add_argument("--limit", type=int, default=20, help="Límite de pendientes a listar")
     p_pending.add_argument("--associate", nargs=2, type=int, metavar=("ENTITY_ID", "PRODUCT_ID"), help="Asociar manualmente una entidad a un producto canónico")
 
+    # Command: init-db
+    p_init = subparsers.add_parser("init-db", help="Inicializar esquema de base de datos y fixtures de tiendas/taxonomía")
+
     # Command: history
     p_hist = subparsers.add_parser("history", help="Ver historial de precios de un producto canónico")
     p_hist.add_argument("product_id", type=int, help="ID del producto canónico")
@@ -468,6 +478,7 @@ def main():
         sys.exit(0)
 
     commands = {
+        "init-db": cmd_init_db,
         "menu": cmd_menu,
         "classify": cmd_classify,
         "demo": cmd_demo,

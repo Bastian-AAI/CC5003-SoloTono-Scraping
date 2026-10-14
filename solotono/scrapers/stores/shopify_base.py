@@ -134,7 +134,11 @@ class ShopifyBaseStore(BaseStore):
         is_available = first_variant.get("available", True)
         stock = 1 if is_available else 0
 
-        images = [img.get("src") for img in p.get("images", []) if img.get("src")]
+        images = [img.get("src") for img in p.get("images", []) if isinstance(img, dict) and img.get("src")]
+        if not images and isinstance(p.get("image"), dict) and p["image"].get("src"):
+            images = [p["image"]["src"]]
+        elif not images and isinstance(p.get("image"), str) and p["image"].startswith("http"):
+            images = [p["image"]]
 
         return ScrapedProduct(
             name=title,

@@ -233,3 +233,21 @@ class EntityHistory(Base):
 
     def __repr__(self) -> str:
         return f"<EntityHistory {self.id}: Ent {self.entity_id} - Offer: ${self.offer_price} at {self.timestamp}>"
+
+
+class User(Base):
+    """User account model for SoloTono auth and roles (user, moderator)."""
+
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(32), unique=True, nullable=False, index=True)
+    name = Column(String(64), default="", nullable=False)
+    password_hash = Column(String(256), nullable=False)
+    role = Column(String(20), default="user", nullable=False)
+    created_at = Column(DateTime, default=utc_now, nullable=False)
+    updated_at = Column(DateTime, default=utc_now, onupdate=utc_now, nullable=False)
+
+    def __repr__(self) -> str:
+        return f"<User {self.id}: {self.username} ({self.role})>"
+

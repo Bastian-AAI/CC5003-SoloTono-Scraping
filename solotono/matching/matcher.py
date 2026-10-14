@@ -28,10 +28,20 @@ class ProductMatcher:
         self.fuzzy_threshold = fuzzy_threshold
         self.pending_threshold = pending_threshold
 
+    def _propagate_image(self, product: Optional[Product], entity: Entity):
+        """If the canonical product lacks an image, update it with the entity's primary image."""
+        if product and (not product.picture_url or product.picture_url.strip() == ""):
+            if entity.picture_urls:
+                first_img = entity.picture_urls.split(",")[0].strip()
+                if first_img:
+                    product.picture_url = first_img
+
     def match_entity(self, entity: Entity, auto_create_canonical: bool = False) -> MatchResult:
         """Evaluate an Entity against existing Products and associate if confidence is high."""
-        # If entity is already associated, preserve association (SoloTodo rule)
+        # If entity is already associated, preserve association (SoloTodo rule) and ensure picture is synced
         if entity.is_associated and entity.product_id:
+            existing_prod = self.session.query(Product).filter(Product.id == entity.product_id).first()
+            self._propagate_image(existing_prod, entity)
             return MatchResult(
                 entity_id=entity.id,
                 matched_product_id=entity.product_id,
@@ -54,6 +64,7 @@ class ProductMatcher:
             if exact_by_mpn:
                 entity.product_id = exact_by_mpn.id
                 entity.is_associated = True
+                self._propagate_image(exact_by_mpn, entity)
                 return MatchResult(
                     entity_id=entity.id,
                     matched_product_id=exact_by_mpn.id,
@@ -67,6 +78,7 @@ class ProductMatcher:
             if exact_by_ean:
                 entity.product_id = exact_by_ean.id
                 entity.is_associated = True
+                self._propagate_image(exact_by_ean, entity)
                 return MatchResult(
                     entity_id=entity.id,
                     matched_product_id=exact_by_ean.id,
@@ -108,6 +120,7 @@ class ProductMatcher:
                 # High confidence match!
                 entity.product_id = best_cand.id
                 entity.is_associated = True
+                self._propagate_image(best_cand, entity)
                 return MatchResult(
                     entity_id=entity.id,
                     matched_product_id=best_cand.id,

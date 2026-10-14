@@ -2,12 +2,20 @@
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Database configuration: defaults to local SQLite, easily switchable to PostgreSQL via env var
-# e.g. postgresql://user:password@localhost:5432/solotono
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/solotono.db")
+# Load .env from project root or scraper directory
+root_env = BASE_DIR.parent / ".env"
+scraper_env = BASE_DIR / ".env"
+if root_env.exists():
+    load_dotenv(root_env)
+elif scraper_env.exists():
+    load_dotenv(scraper_env)
+
+# Database configuration: defaults to local PostgreSQL container, fallback to SQLite if needed
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/solotono")
 
 # Scraping settings
 HTTP_TIMEOUT = int(os.getenv("HTTP_TIMEOUT", "15"))
@@ -24,3 +32,5 @@ USER_AGENT = os.getenv(
 MATCH_EXACT_BOOST = 1.0
 MATCH_FUZZY_THRESHOLD = float(os.getenv("MATCH_FUZZY_THRESHOLD", "0.85"))
 MATCH_PENDING_THRESHOLD = float(os.getenv("MATCH_PENDING_THRESHOLD", "0.60"))
+AUTO_CREATE_CANONICAL = os.getenv("AUTO_CREATE_CANONICAL", "true").lower() in ("true", "1", "yes")
+

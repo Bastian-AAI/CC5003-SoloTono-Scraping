@@ -40,6 +40,21 @@ class ScrapedProduct:
         if self.offer_price > self.normal_price:
             self.normal_price = self.offer_price
 
+        # Sanitize and normalize picture URLs
+        clean_pics: List[str] = []
+        for pic in self.picture_urls:
+            if not pic:
+                continue
+            pic_str = str(pic).strip()
+            if pic_str.startswith("//"):
+                pic_str = f"https:{pic_str}"
+            elif pic_str.startswith("http://") and "localhost" not in pic_str:
+                # Upgrade insecure HTTP images to HTTPS for mixed content security
+                pic_str = pic_str.replace("http://", "https://", 1)
+            if (pic_str.startswith("https://") or pic_str.startswith("/")) and pic_str not in clean_pics:
+                clean_pics.append(pic_str)
+        self.picture_urls = clean_pics
+
 
 class BaseStore(ABC):
     """Abstract base class for all SoloTono store scrapers."""

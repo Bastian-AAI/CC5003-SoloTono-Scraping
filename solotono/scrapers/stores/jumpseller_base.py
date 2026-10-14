@@ -26,24 +26,35 @@ class JumpsellerBaseStore(BaseStore):
         urls: List[str] = []
 
         for path in cls.category_paths:
-            cat_url = urljoin(cls.website_url, path)
-            try:
-                r = session.get(cat_url, timeout=15)
-                if r.status_code != 200:
-                    continue
+            page = 1
+            while True:
+                cat_url = urljoin(cls.website_url, f"{path}?page={page}") if page > 1 else urljoin(cls.website_url, path)
+                try:
+                    r = session.get(cat_url, timeout=15)
+                    if r.status_code != 200:
+                        break
 
-                soup = BeautifulSoup(r.text, "html.parser")
-                cards = soup.select(".product-block a[href], .product-title a, article a[href], .product-item a[href]")
-                for a in cards:
-                    href = a.get("href")
-                    if href and not href.startswith("http"):
-                        href = urljoin(cls.website_url, href)
-                    if href and href not in urls and not any(x in href for x in ["customer", "cart", "checkout"]):
-                        urls.append(href)
-                        if limit and len(urls) >= limit:
-                            return urls
-            except Exception:
-                continue
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    cards = soup.select(".product-block a[href], .product-title a, article a[href], .product-item a[href]")
+                    if not cards:
+                        break
+
+                    new_on_page = 0
+                    for a in cards:
+                        href = a.get("href")
+                        if href and not href.startswith("http"):
+                            href = urljoin(cls.website_url, href)
+                        if href and href not in urls and not any(x in href for x in ["customer", "cart", "checkout"]):
+                            urls.append(href)
+                            new_on_page += 1
+                            if limit and len(urls) >= limit:
+                                return urls
+
+                    if new_on_page == 0 or (limit and len(urls) >= limit):
+                        break
+                    page += 1
+                except Exception:
+                    break
 
         return urls
 
@@ -87,7 +98,20 @@ class JumpsellerBaseStore(BaseStore):
                     offer_price = cls.clean_price(price_tag.get_text())
                     normal_price = offer_price
 
-            imgs = [img["src"] for img in soup.select(".product-images img, .carousel-item img, img.product-image") if img.get("src")]
+            # Extract images (OG image, gallery, jumpseller CDN)
+            imgs: List[str] = []
+            og_img = soup.select_one("meta[property='og:image'], meta[name='og:image']")
+            if og_img and og_img.get("content"):
+                c = og_img["content"].strip()
+                if c.startswith("http") and not any(x in c.lower() for x in ["cover/", "epic_32x32", "logo", "sin_t_tulo", "banner"]):
+                    imgs.append(c)
+
+            for img in soup.select(".product-gallery img, .product-images img, .carousel-item img, img.product-image, img.product-gallery__image, [data-zoom-image], a.product-gallery__link"):
+                src = img.get("data-zoom-image") or img.get("href") or img.get("src") or img.get("data-src")
+                if src:
+                    full_src = urljoin(cls.website_url, src)
+                    if full_src not in imgs and not any(x in full_src.lower() for x in ["thumb/84/", "thumb/80/", "thumb/45/", "logo", "icon", "cover/"]):
+                        imgs.append(full_src)
 
             # Infer brand
             brand = cls.store_name

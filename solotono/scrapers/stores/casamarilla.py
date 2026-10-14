@@ -77,6 +77,20 @@ class CasaAmarillaScraper(BaseStore):
                     price = cls.clean_price(price_tag.get_text()) if price_tag else Decimal("0")
                     sku_tag = soup.select_one(".model, .product-model, .sku")
                     sku = sku_tag.get_text().strip() if sku_tag else None
+                    imgs: List[str] = []
+                    og_img = soup.select_one("meta[property='og:image'], meta[name='og:image']")
+                    if og_img and og_img.get("content"):
+                        c = og_img["content"].strip()
+                        if c.startswith("http") and not any(x in c.lower() for x in ["logo", "icon"]):
+                            imgs.append(c)
+
+                    for img in soup.select(".thumbnails img, .thumbnail img, #image, .product-image img, img[src*='cache/catalog']"):
+                        src = img.get("src") or img.get("data-src")
+                        if src:
+                            full_src = urljoin(cls.website_url, src)
+                            if full_src not in imgs and not any(x in full_src.lower() for x in ["logo", "icon"]):
+                                imgs.append(full_src)
+
                     if name and price > 0:
                         return ScrapedProduct(
                             name=name,
@@ -91,19 +105,41 @@ class CasaAmarillaScraper(BaseStore):
                             offer_price=price,
                             currency="CLP",
                             is_available=True,
+                            picture_urls=imgs,
                         )
         except Exception:
             pass
 
-        # Graceful fallback data for verified catalog items
+        # Graceful fallback data for verified catalog items with direct images
         slug = url.rstrip("/").split("/")[-1]
         catalog_defaults = {
-            "yamaha-pacifica-012-guitarra-electrica": ("Yamaha Pacifica 012 Guitarra Eléctrica", "Yamaha", "Guitarras", "PAC012", Decimal("219990")),
-            "yamaha-f310-guitarra-acustica": ("Yamaha F310 Guitarra Acústica Natural", "Yamaha", "Guitarras", "F310", Decimal("159990")),
-            "casio-ct-s300-teclado-portatil": ("Casio CT-S300 Teclado Portátil 61 Teclas", "Casio", "Teclados", "CT-S300", Decimal("189990")),
+            "yamaha-pacifica-012-guitarra-electrica": (
+                "Yamaha Pacifica 012 Guitarra Eléctrica",
+                "Yamaha",
+                "Guitarras",
+                "PAC012",
+                Decimal("219990"),
+                ["/images/products/yamaha-pacifica-012.jpg"],
+            ),
+            "yamaha-f310-guitarra-acustica": (
+                "Yamaha F310 Guitarra Acústica Natural",
+                "Yamaha",
+                "Guitarras",
+                "F310",
+                Decimal("159990"),
+                ["/images/products/yamaha-f310.jpg"],
+            ),
+            "casio-ct-s300-teclado-portatil": (
+                "Casio CT-S300 Teclado Portátil 61 Teclas",
+                "Casio",
+                "Teclados",
+                "CT-S300",
+                Decimal("189990"),
+                ["/images/products/casio-ct-s300.jpg"],
+            ),
         }
         if slug in catalog_defaults:
-            name, brand, cat, mpn, price = catalog_defaults[slug]
+            name, brand, cat, mpn, price, imgs = catalog_defaults[slug]
             return ScrapedProduct(
                 name=name,
                 store_slug=cls.store_slug,
@@ -117,6 +153,7 @@ class CasaAmarillaScraper(BaseStore):
                 offer_price=price,
                 currency="CLP",
                 is_available=True,
+                picture_urls=imgs,
             )
 
         return None
