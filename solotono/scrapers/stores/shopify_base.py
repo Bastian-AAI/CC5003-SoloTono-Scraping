@@ -77,7 +77,7 @@ class ShopifyBaseStore(BaseStore):
         session = get_scraper_session()
         results: List[ScrapedProduct] = []
         page = 1
-        page_size = min(limit or 50, 50)
+        page_size = min(limit or 250, 250)
 
         while True:
             api_url = f"{cls.website_url}/products.json"

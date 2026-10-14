@@ -214,19 +214,19 @@ CATEGORY_RULES: List[Tuple[str, List[str], List[str], float]] = [
     ),
     (
         "consolas-y-mezcladoras",
-        ["consola de sonido", "mezcladora", "mixer analogo", "mixer digital", "behringer x32", "soundcraft", "yamaha mg"],
-        ["interfaz"],
+        ["consola de sonido", "mezcladora", "mixer analogo", "mixer digital", "behringer x32", "soundcraft", "yamaha mg", "mixer", "consola"],
+        ["interfaz", "soporte"],
         0.90,
     ),
     (
         "cables-y-conectores",
-        ["cable de instrumento", "cable plug", "cable xlr", "cable canon", "cable dmx", "conector neutrik"],
+        ["cable de instrumento", "cable plug", "cable xlr", "cable canon", "cable dmx", "conector neutrik", "cable para guitarra", "cable balanceado", "conector", "cable"],
         [],
-        0.90,
+        0.85,
     ),
     (
         "cuerdas-guitarra-y-bajo",
-        ["juego de cuerdas", "set de cuerdas", "encordado", "encordados", "cuerdas para guitarra", "cuerdas para bajo", "cuerdas ernie ball", "cuerdas d'addario", "cuerdas elixir", "calibre 09", "calibre 10", "cuerdas bajo"],
+        ["juego de cuerdas", "set de cuerdas", "encordado", "encordados", "cuerdas para guitarra", "cuerdas para bajo", "cuerdas ernie ball", "cuerdas d'addario", "cuerdas elixir", "calibre 09", "calibre 10", "cuerdas bajo", "cuerdas"],
         ["guitarra electrica", "guitarra acustica", "bajo electrico", "ibanez rg", "stratocaster", "telecaster", "les paul", "afinador"],
         0.90,
     ),
@@ -249,20 +249,32 @@ CATEGORY_RULES: List[Tuple[str, List[str], List[str], float]] = [
         0.90,
     ),
     (
+        "potenciometros-y-switches",
+        ["potenciometro", "switches", "switch 3 posiciones", "switch 5 posiciones", "selector pastillas", "knob", "perilla"],
+        [],
+        0.90,
+    ),
+    (
+        "jacks-y-placas",
+        ["jack hembra", "jack input", "jackplate", "placa jack"],
+        [],
+        0.90,
+    ),
+    (
         "correas-straps",
-        ["correa", "guitar strap", "bass strap", "straplock"],
+        ["correa", "guitar strap", "bass strap", "straplock", "tali", "tahali"],
         [],
         0.90,
     ),
     (
         "fundas-y-estuches",
-        ["funda", "gig bag", "estuche rigido", "hardcase", "case guitarra"],
+        ["funda", "gig bag", "estuche rigido", "hardcase", "case guitarra", "estuche", "cover"],
         [],
         0.90,
     ),
     (
         "soportes-stands",
-        ["soporte para guitarra", "guitar stand", "soporte de teclado", "soporte de microfono"],
+        ["soporte para guitarra", "guitar stand", "soporte de teclado", "soporte de microfono", "atril", "pie de microfono", "stand"],
         [],
         0.90,
     ),
@@ -313,10 +325,14 @@ def classify_product(
                     matched_rule = pos
 
     if not best_match:
-        # Fallback to general generic category
-        best_match = "guitarras-electricas" if "guitarra" in norm else "accesorios"
-        best_score = 0.40
-        matched_rule = "fallback"
+        if "guitarra" in norm:
+            best_match = "guitarras-electricas"
+            best_score = 0.50
+            matched_rule = "guitarra fallback"
+        else:
+            best_match = None
+            best_score = 0.0
+            matched_rule = "unclassified"
 
     # Detect subcategory params (facets)
     detected_params: Dict[str, str] = {}
@@ -349,7 +365,7 @@ def classify_product(
 
     cat_id = None
     cat_name = None
-    if session:
+    if session and best_match:
         cat_obj = session.query(Category).filter(Category.slug == best_match).first()
         if cat_obj:
             cat_id = cat_obj.id
