@@ -84,19 +84,26 @@ class BaseStore(ABC):
 
     @classmethod
     def scrape_all(cls, limit: Optional[int] = None, category: Optional[str] = None) -> List[ScrapedProduct]:
-        """Scrapes multiple products up to limit."""
+        """Scrapes multiple products up to limit using parallel execution for DOM stores."""
         urls = cls.discover_product_urls(category=category, limit=limit)
+        if not urls:
+            return []
+
         products: List[ScrapedProduct] = []
-        for url in urls:
-            try:
-                prod = cls.scrape_product(url)
-                if prod:
-                    products.append(prod)
-                    if limit and len(products) >= limit:
-                        break
-            except Exception as e:
-                # Log and continue so one broken product page doesn't crash the entire run
-                continue
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        max_workers = min(8, max(1, len(urls)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_url = {executor.submit(cls.scrape_product, url): url for url in urls}
+            for future in as_completed(future_to_url):
+                try:
+                    prod = future.result()
+                    if prod:
+                        products.append(prod)
+                        if limit and len(products) >= limit:
+                            break
+                except Exception:
+                    continue
         return products
 
     # Utility helpers for all store scrapers

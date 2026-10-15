@@ -35,19 +35,30 @@ class OverdriveScraper(BaseStore):
     def discover_product_urls(cls, category: Optional[str] = None, limit: Optional[int] = None) -> List[str]:
         urls: List[str] = []
         for path in cls.category_paths:
-            cat_url = urljoin(cls.website_url, path)
-            html_content = fetch_url(cat_url, use_cffi=True)
-            if not html_content:
-                continue
+            page = 1
+            while True:
+                cat_url = urljoin(cls.website_url, f"{path.rstrip('/')}/page/{page}/") if page > 1 else urljoin(cls.website_url, path)
+                html_content = fetch_url(cat_url, use_cffi=True)
+                if not html_content:
+                    break
 
-            soup = BeautifulSoup(html_content, "html.parser")
-            items = soup.select(".woocommerce-loop-product__link, .product a[href*='/producto/']")
-            for a in items:
-                href = a.get("href")
-                if href and "/producto/" in href and href not in urls:
-                    urls.append(href)
-                    if limit and len(urls) >= limit:
-                        return urls
+                soup = BeautifulSoup(html_content, "html.parser")
+                items = soup.select(".woocommerce-loop-product__link, .product a[href*='/producto/']")
+                if not items:
+                    break
+
+                new_items = 0
+                for a in items:
+                    href = a.get("href")
+                    if href and "/producto/" in href and href not in urls:
+                        urls.append(href)
+                        new_items += 1
+                        if limit and len(urls) >= limit:
+                            return urls
+
+                if new_items == 0 or (limit and len(urls) >= limit):
+                    break
+                page += 1
 
         # Resilient fallback if datacenter IP is blocked by store WAF/Cloudflare
         if not urls:

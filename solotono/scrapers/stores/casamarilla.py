@@ -34,22 +34,31 @@ class CasaAmarillaScraper(BaseStore):
         urls: List[str] = []
 
         for path in cls.category_paths:
-            cat_url = urljoin(cls.website_url, path)
-            try:
-                r = session.get(cat_url, timeout=15)
-                if r.status_code != 200:
-                    continue
+            page = 1
+            while True:
+                cat_url = urljoin(cls.website_url, f"{path}?page={page}") if page > 1 else urljoin(cls.website_url, path)
+                try:
+                    r = session.get(cat_url, timeout=15)
+                    if r.status_code != 200:
+                        break
 
-                soup = BeautifulSoup(r.text, "html.parser")
-                cards = soup.select(".product-thumb h4 a, .product-layout a, .caption h4 a")
-                for a in cards:
-                    href = a.get("href")
-                    if href and href not in urls:
-                        urls.append(urljoin(cls.website_url, href))
-                        if limit and len(urls) >= limit:
-                            return urls
-            except Exception:
-                continue
+                    soup = BeautifulSoup(r.text, "html.parser")
+                    cards = soup.select(".product-thumb h4 a, .product-layout a, .caption h4 a")
+                    if not cards:
+                        break
+                    new_cards = 0
+                    for a in cards:
+                        href = a.get("href")
+                        if href and href not in urls:
+                            urls.append(urljoin(cls.website_url, href))
+                            new_cards += 1
+                            if limit and len(urls) >= limit:
+                                return urls
+                    if new_cards == 0 or (limit and len(urls) >= limit):
+                        break
+                    page += 1
+                except Exception:
+                    break
 
         # If OpenCart dynamically hydrates products via JS, provide verified direct catalog paths
         if not urls:
