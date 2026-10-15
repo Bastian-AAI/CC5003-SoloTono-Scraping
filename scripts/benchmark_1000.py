@@ -18,6 +18,7 @@ from solotono.scrapers.stores.promusic import PromusicScraper
 from solotono.scrapers.stores.audiomusica import AudiomusicaScraper
 from solotono.scrapers.stores.rdmusico import RdMusicoScraper
 from solotono.scrapers.stores.fatstore import FatStoreScraper
+from solotono.scrapers.stores.fender_chile import FenderChileScraper
 from solotono.scrapers.base import ScrapedProduct
 
 console = Console()
@@ -35,10 +36,11 @@ def run_1000_benchmark():
 
     # Stores and quota allocations to reach >= 1,000 products
     store_targets = [
-        (PromusicScraper, 450),
+        (FenderChileScraper, 100),
+        (PromusicScraper, 400),
         (AudiomusicaScraper, 300),
-        (RdMusicoScraper, 250),
-        (FatStoreScraper, 150),
+        (RdMusicoScraper, 200),
+        (FatStoreScraper, 100),
     ]
 
     all_scraped: List[ScrapedProduct] = []

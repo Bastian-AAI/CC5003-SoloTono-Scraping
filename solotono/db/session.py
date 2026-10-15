@@ -126,8 +126,10 @@ STORE_DEFINITIONS = [
 ]
 
 
-def init_db(prepopulate_stores: bool = True, prepopulate_taxonomy: bool = True):
+def init_db(prepopulate_stores: bool = True, prepopulate_taxonomy: bool = True, drop_first: bool = False):
     """Create all tables and optionally seed store and taxonomy definitions."""
+    if drop_first:
+        Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 
     with get_db_session() as session:

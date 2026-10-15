@@ -59,7 +59,7 @@ def cmd_stats(args):
 def cmd_init_db(args):
     """Initialize database tables and seed taxonomy and store definitions."""
     console.print("[bold blue]Inicializando esquema de base de datos y fixtures...[/bold blue]")
-    init_db(prepopulate_stores=True, prepopulate_taxonomy=True)
+    init_db(prepopulate_stores=True, prepopulate_taxonomy=True, drop_first=getattr(args, "drop", False))
     console.print("[bold green]✓ Base de datos inicializada exitosamente con tiendas y taxonomía.[/bold green]")
 
 
@@ -455,7 +455,7 @@ def main():
 
     # Command: match
     p_match = subparsers.add_parser("match", help="Ejecutar Product Matching sobre entidades pendientes")
-    p_match.add_argument("--threshold", type=float, default=0.85, help="Umbral de confianza fuzzy (0.0 - 1.0)")
+    p_match.add_argument("--threshold", type=float, default=0.90, help="Umbral de confianza fuzzy (0.0 - 1.0)")
     p_match.add_argument("--auto-create", action="store_true", default=False, help="Crear producto canónico para no coincidentes")
 
     # Command: pending
@@ -465,6 +465,7 @@ def main():
 
     # Command: init-db
     p_init = subparsers.add_parser("init-db", help="Inicializar esquema de base de datos y fixtures de tiendas/taxonomía")
+    p_init.add_argument("--drop", action="store_true", help="Eliminar tablas existentes antes de recrear el esquema")
 
     # Command: history
     p_hist = subparsers.add_parser("history", help="Ver historial de precios de un producto canónico")
