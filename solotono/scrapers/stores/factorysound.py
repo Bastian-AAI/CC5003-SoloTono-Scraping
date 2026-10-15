@@ -1,12 +1,15 @@
-"""Factory Sound store scraper (Prestashop platform)."""
+"""Factory Sound store scraper (Prestashop platform with full catalog pagination)."""
 
 from decimal import Decimal
+import logging
 from typing import List, Optional
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 
 from solotono.scrapers.base import BaseStore, ScrapedProduct
 from solotono.scrapers.session import get_scraper_session
+
+logger = logging.getLogger(__name__)
 
 
 class FactorySoundScraper(BaseStore):
@@ -18,9 +21,8 @@ class FactorySoundScraper(BaseStore):
     category_paths = [
         "/54-guitarras-instrumento-musical",
         "/233-guitarras-electricas",
-        "/11-bajos",
+        "/52-bajos-instrumento-musical",
         "/12-baterias-y-percusion",
-        "/13-teclados-y-pianos",
         "/14-audio-profesional",
     ]
 
@@ -39,6 +41,43 @@ class FactorySoundScraper(BaseStore):
         session = get_scraper_session()
         urls: List[str] = []
 
+        # 1. Primary discovery: Paginate through the master catalog (2-catalogo) with 100 items per page
+        page = 1
+        max_pages = 40
+        while page <= max_pages:
+            cat_url = f"{cls.website_url}/2-catalogo?resultsPerPage=100&page={page}"
+            try:
+                r = session.get(cat_url, timeout=20)
+                if r.status_code != 200:
+                    break
+
+                soup = BeautifulSoup(r.text, "html.parser")
+                cards = soup.select(".product-miniature a.product-thumbnail, article.product-miniature a[href]")
+                if not cards:
+                    break
+
+                new_on_page = 0
+                for a in cards:
+                    href = a.get("href")
+                    if href and ".html" in href and href.startswith("http") and href not in urls:
+                        if any(x in href for x in ["order", "cart", "controller", "content/"]):
+                            continue
+                        urls.append(href)
+                        new_on_page += 1
+                        if limit and len(urls) >= limit:
+                            return urls
+
+                if new_on_page == 0:
+                    break
+                page += 1
+            except Exception as e:
+                logger.warning(f"Error paginating Factory Sound 2-catalogo page {page}: {e}")
+                break
+
+        if urls:
+            return urls
+
+        # 2. Secondary fallback: crawl individual category paths
         for path in cls.category_paths:
             page = 1
             while True:
@@ -93,13 +132,21 @@ class FactorySoundScraper(BaseStore):
             # Try JSON-LD first
             json_ld = cls.parse_json_ld(soup)
             if json_ld:
-                name = json_ld.get("name", "")
+                name = (json_ld.get("name") or "").strip()
                 sku = json_ld.get("sku")
                 offers = json_ld.get("offers", {})
                 if isinstance(offers, list) and offers:
                     offers = offers[0]
                 price = cls.clean_price(offers.get("price", "0")) if isinstance(offers, dict) else Decimal("0")
                 
+                # Brand from JSON-LD
+                brand = cls.store_name
+                brand_ld = json_ld.get("brand")
+                if isinstance(brand_ld, dict) and brand_ld.get("name"):
+                    brand = brand_ld["name"].strip()
+                elif isinstance(brand_ld, str) and brand_ld.strip():
+                    brand = brand_ld.strip()
+
                 ld_img = json_ld.get("image")
                 if isinstance(ld_img, str) and ld_img.startswith("http") and ld_img not in images:
                     images.append(ld_img)
@@ -107,6 +154,19 @@ class FactorySoundScraper(BaseStore):
                     for im in ld_img:
                         if isinstance(im, str) and im.startswith("http") and im not in images:
                             images.append(im)
+
+                if brand == cls.store_name:
+                    mfg = soup.select_one(".product-manufacturer a, [itemprop='brand']")
+                    if mfg:
+                        mfg_text = mfg.get_text().replace("Marca:", "").strip()
+                        if mfg_text:
+                            brand = mfg_text
+
+                if brand == cls.store_name:
+                    for b in ["Fujigen", "FGN", "Alhambra", "Vintage", "Aria", "Aguilar", "Santo Angelo", "Sigma", "Aquarian", "Fender", "Gibson", "Ibanez"]:
+                        if b.lower() in name.lower():
+                            brand = b
+                            break
 
                 if name and price > 0:
                     return ScrapedProduct(
@@ -116,7 +176,7 @@ class FactorySoundScraper(BaseStore):
                         key=sku or url.split("/")[-1].replace(".html", ""),
                         sku=sku,
                         part_number=sku,
-                        brand="Factory Sound",
+                        brand=brand,
                         category="Instrumentos",
                         normal_price=price,
                         offer_price=price,
@@ -131,15 +191,33 @@ class FactorySoundScraper(BaseStore):
             if not h1:
                 return None
             name = h1.get_text().strip()
+            if not name:
+                return None
 
             price_tag = soup.select_one(".current-price span[content], .current-price-value, span[itemprop='price'], .product-price")
             raw_price = price_tag.get("content") or price_tag.get_text() if price_tag else "0"
             price = cls.clean_price(raw_price)
+            if price <= 0:
+                return None
 
             ref_tag = soup.select_one(".product-reference span, span[itemprop='sku']")
             sku = ref_tag.get_text().strip() if ref_tag else None
 
-            for img in soup.select(".product-cover img, .js-qv-product-cover, img[src*='product_zoom'], img[src*='home_default']"):
+            # Brand
+            brand = cls.store_name
+            mfg = soup.select_one(".product-manufacturer a, [itemprop='brand']")
+            if mfg:
+                mfg_text = mfg.get_text().replace("Marca:", "").strip()
+                if mfg_text:
+                    brand = mfg_text
+
+            if brand == cls.store_name:
+                for b in ["Fujigen", "FGN", "Alhambra", "Vintage", "Aria", "Aguilar", "Santo Angelo", "Sigma", "Aquarian", "Fender", "Gibson", "Ibanez"]:
+                    if b.lower() in name.lower():
+                        brand = b
+                        break
+
+            for img in soup.select(".product-cover img, .js-qv-product-cover, img[src*='product_zoom'], img[src*='home_default'], img[src*='large_default']"):
                 src = img.get("src") or img.get("data-src")
                 if src:
                     full_src = urljoin(cls.website_url, src)
@@ -150,16 +228,16 @@ class FactorySoundScraper(BaseStore):
                 name=name,
                 store_slug=cls.store_slug,
                 url=url,
-                key=sku or url.split("/")[-1],
+                key=sku or url.split("/")[-1].replace(".html", ""),
                 sku=sku,
                 part_number=sku,
-                brand="Factory Sound",
+                brand=brand,
                 category="Instrumentos",
                 normal_price=price,
                 offer_price=price,
                 currency="CLP",
                 stock=1,
-                is_available=price > 0,
+                is_available=True,
                 picture_urls=images,
             )
         except Exception:

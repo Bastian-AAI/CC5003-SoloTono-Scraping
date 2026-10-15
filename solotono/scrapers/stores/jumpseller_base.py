@@ -1,13 +1,17 @@
 """Base scraper implementation for Jumpseller-based music stores."""
 
 from decimal import Decimal
-from typing import List, Optional
-from urllib.parse import urljoin
-from bs4 import BeautifulSoup
 import json
+import logging
+from typing import List, Optional
+from urllib.parse import urljoin, urlparse
+import xml.etree.ElementTree as ET
+from bs4 import BeautifulSoup
 
 from solotono.scrapers.base import BaseStore, ScrapedProduct
 from solotono.scrapers.session import get_scraper_session
+
+logger = logging.getLogger(__name__)
 
 
 class JumpsellerBaseStore(BaseStore):
@@ -25,6 +29,38 @@ class JumpsellerBaseStore(BaseStore):
         session = get_scraper_session()
         urls: List[str] = []
 
+        # 1. Primary discovery: parse store sitemap.xml
+        try:
+            sitemap_url = urljoin(cls.website_url, "/sitemap.xml")
+            r = session.get(sitemap_url, timeout=25)
+            if r.status_code == 200 and r.content:
+                root = ET.fromstring(r.content)
+                ignored_keywords = [
+                    "/contact", "/contacto", "/blog", "/terminos", "/politica", "/cart",
+                    "/checkout", "/admin", "/account", "/customer", "/category", "/categories",
+                    "/search", "/opiniones", "/reviews", "/ofertas-1", "/tienda", "/faq",
+                    "/quienes-somos", "/sobre-nosotros", "/pago", "/despacho"
+                ]
+                for loc in root.findall(".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc"):
+                    u = (loc.text or "").strip()
+                    if not u:
+                        continue
+                    path = urlparse(u).path.strip("/")
+                    if not path:
+                        continue
+                    if any(k in u.lower() for k in ignored_keywords):
+                        continue
+                    if u not in urls:
+                        urls.append(u)
+                        if limit and len(urls) >= limit:
+                            return urls
+        except Exception as e:
+            logger.warning(f"Error fetching Jumpseller sitemap for {cls.store_slug}: {e}")
+
+        if urls:
+            return urls
+
+        # 2. Secondary fallback: crawl category paths
         for path in cls.category_paths:
             page = 1
             while True:
@@ -71,6 +107,8 @@ class JumpsellerBaseStore(BaseStore):
             if not h1:
                 return None
             name = h1.get_text().strip()
+            if not name:
+                return None
 
             normal_price = Decimal("0")
             offer_price = Decimal("0")
@@ -98,6 +136,10 @@ class JumpsellerBaseStore(BaseStore):
                     offer_price = cls.clean_price(price_tag.get_text())
                     normal_price = offer_price
 
+            # Reject non-product pages or items without pricing
+            if offer_price <= 0 and normal_price <= 0:
+                return None
+
             # Extract images (OG image, gallery, jumpseller CDN)
             imgs: List[str] = []
             og_img = soup.select_one("meta[property='og:image'], meta[name='og:image']")
@@ -113,12 +155,19 @@ class JumpsellerBaseStore(BaseStore):
                     if full_src not in imgs and not any(x in full_src.lower() for x in ["thumb/84/", "thumb/80/", "thumb/45/", "logo", "icon", "cover/"]):
                         imgs.append(full_src)
 
-            # Infer brand
+            # Extract brand from metadata, or infer from title
             brand = cls.store_name
-            for b in ["Fender", "Gibson", "Ibanez", "Yamaha", "Epiphone", "Cort", "Almansa", "Takamine", "Taylor", "Martin", "Boss", "Roland", "Shure", "Behringer", "Focusrite"]:
-                if b.lower() in name.lower():
-                    brand = b
-                    break
+            brand_meta = soup.select_one("meta[property='og:brand'], meta[name='brand'], [itemprop='brand']")
+            if brand_meta:
+                meta_brand = (brand_meta.get("content") or brand_meta.get_text() or "").strip()
+                if meta_brand:
+                    brand = meta_brand
+
+            if brand == cls.store_name:
+                for b in ["Fender", "Gibson", "Ibanez", "Yamaha", "Epiphone", "Cort", "Almansa", "Takamine", "Taylor", "Martin", "Boss", "Roland", "Shure", "Behringer", "Focusrite", "Tagima", "Squier", "Marshall"]:
+                    if b.lower() in name.lower():
+                        brand = b
+                        break
 
             return ScrapedProduct(
                 name=name,

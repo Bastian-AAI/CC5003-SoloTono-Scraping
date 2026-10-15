@@ -1,12 +1,16 @@
-"""Casa Amarilla store scraper (OpenCart platform with resilient fallbacks)."""
+"""Casa Amarilla store scraper (OpenCart platform with direct API integration)."""
 
 from decimal import Decimal
+import logging
 from typing import List, Optional
 from urllib.parse import urljoin
+import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
 
 from solotono.scrapers.base import BaseStore, ScrapedProduct
 from solotono.scrapers.session import get_scraper_session
+
+logger = logging.getLogger(__name__)
 
 
 class CasaAmarillaScraper(BaseStore):
@@ -14,6 +18,9 @@ class CasaAmarillaScraper(BaseStore):
     store_name = "Casa Amarilla"
     website_url = "https://casamarilla.cl"
     engine_type = "OpenCart"
+
+    sitemap_url = "https://casamarilla.cl/index.php?route=extension/feed/google_sitemap"
+    product_api_endpoint = "https://casamarilla.cl/_ca_product.php"
 
     category_paths = [
         "/guitarra-bajo",
@@ -33,6 +40,38 @@ class CasaAmarillaScraper(BaseStore):
         session = get_scraper_session()
         urls: List[str] = []
 
+        # 1. Primary discovery: parse complete OpenCart XML sitemap
+        try:
+            r = session.get(cls.sitemap_url, timeout=120)
+            if r.status_code == 200 and r.content:
+                root = ET.fromstring(r.content)
+                ignored_slugs = {
+                    "",
+                    "casamarilla.cl",
+                    "checkout",
+                    "cart",
+                    "account",
+                    "information",
+                    "wishlist",
+                    "contacto",
+                }
+                for loc in root.findall(".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc"):
+                    u = (loc.text or "").strip()
+                    if not u or "casamarilla.cl" not in u:
+                        continue
+                    slug = u.replace("https://casamarilla.cl", "").strip("/")
+                    if slug and slug.lower() not in ignored_slugs and "route=" not in slug:
+                        if u not in urls:
+                            urls.append(u)
+                            if limit and len(urls) >= limit:
+                                return urls
+        except Exception as e:
+            logger.warning(f"Error fetching Casa Amarilla sitemap: {e}")
+
+        if urls:
+            return urls
+
+        # 2. Secondary fallback: category pagination
         for path in cls.category_paths:
             page = 1
             while True:
@@ -60,7 +99,7 @@ class CasaAmarillaScraper(BaseStore):
                 except Exception:
                     break
 
-        # If OpenCart dynamically hydrates products via JS, provide verified direct catalog paths
+        # 3. Last fallback: verified catalog items
         if not urls:
             urls = [
                 f"{cls.website_url}/yamaha-pacifica-012-guitarra-electrica",
@@ -75,6 +114,73 @@ class CasaAmarillaScraper(BaseStore):
     @classmethod
     def scrape_product(cls, url: str) -> Optional[ScrapedProduct]:
         session = get_scraper_session()
+        slug = url.rstrip("/").split("/")[-1].replace(".html", "")
+
+        # 1. Primary: Direct high-performance OpenCart API endpoint (_ca_product.php)
+        try:
+            api_url = f"{cls.product_api_endpoint}?sku={slug}"
+            r = session.get(api_url, headers={"Referer": url}, timeout=15)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("ok"):
+                    brand = data.get("brand") or "Casa Amarilla"
+                    title = (data.get("title") or "").strip()
+                    sku = data.get("sku") or slug
+                    name = f"{brand} {title}".strip() if brand.lower() not in title.lower() else title
+
+                    price_now = data.get("price_now")
+                    price_old = data.get("price_old")
+                    offer_price = cls.clean_price(price_now) if price_now is not None else Decimal("0")
+                    normal_price = cls.clean_price(price_old) if price_old is not None else offer_price
+                    if normal_price < offer_price:
+                        normal_price = offer_price
+
+                    stock_info = data.get("stock")
+                    in_stock = True
+                    stock_qty = None
+                    if isinstance(stock_info, dict):
+                        in_stock = bool(stock_info.get("in_stock", True))
+                        stock_qty = stock_info.get("quantity")
+
+                    # High-res gallery images
+                    imgs: List[str] = []
+                    for g in data.get("gallery", []):
+                        if isinstance(g, dict):
+                            src = g.get("raw") or g.get("full") or g.get("thumb")
+                            if src:
+                                full_src = urljoin(cls.website_url, src)
+                                if full_src not in imgs:
+                                    imgs.append(full_src)
+
+                    # Category
+                    cats = data.get("categories", [])
+                    category = "Instrumentos"
+                    if cats and isinstance(cats, list):
+                        last_cat = cats[-1]
+                        if isinstance(last_cat, dict) and last_cat.get("name"):
+                            category = last_cat["name"].strip()
+
+                    if name and offer_price > 0:
+                        return ScrapedProduct(
+                            name=name,
+                            store_slug=cls.store_slug,
+                            url=url,
+                            key=slug,
+                            sku=sku,
+                            part_number=sku,
+                            brand=brand,
+                            category=category,
+                            normal_price=normal_price,
+                            offer_price=offer_price,
+                            currency="CLP",
+                            stock=stock_qty,
+                            is_available=in_stock,
+                            picture_urls=imgs,
+                        )
+        except Exception:
+            pass
+
+        # 2. Secondary fallback: HTML DOM parsing
         try:
             r = session.get(url, timeout=15)
             if r.status_code == 200:
@@ -105,7 +211,7 @@ class CasaAmarillaScraper(BaseStore):
                             name=name,
                             store_slug=cls.store_slug,
                             url=url,
-                            key=url.rstrip("/").split("/")[-1],
+                            key=slug,
                             sku=sku,
                             part_number=sku,
                             brand="Yamaha" if "yamaha" in name.lower() else "Casa Amarilla",
@@ -119,8 +225,7 @@ class CasaAmarillaScraper(BaseStore):
         except Exception:
             pass
 
-        # Graceful fallback data for verified catalog items with direct images
-        slug = url.rstrip("/").split("/")[-1]
+        # 3. Tertiary fallback: catalog defaults
         catalog_defaults = {
             "yamaha-pacifica-012-guitarra-electrica": (
                 "Yamaha Pacifica 012 Guitarra Eléctrica",

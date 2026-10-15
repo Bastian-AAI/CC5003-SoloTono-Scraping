@@ -1,19 +1,23 @@
-"""Instrumentos Chile store scraper."""
+"""Instrumentos Chile store scraper (Bsale platform with sitemap discovery)."""
 
 from decimal import Decimal
+import logging
 from typing import List, Optional
 from urllib.parse import urljoin
+import xml.etree.ElementTree as ET
 from bs4 import BeautifulSoup
 
 from solotono.scrapers.base import BaseStore, ScrapedProduct
 from solotono.scrapers.session import get_scraper_session
+
+logger = logging.getLogger(__name__)
 
 
 class InstrumentosChileScraper(BaseStore):
     store_slug = "instrumentoschile"
     store_name = "Instrumentos Chile"
     website_url = "https://instrumentoschile.cl"
-    engine_type = "Magento"
+    engine_type = "Bsale"
 
     category_paths = [
         "/collection/guitarra-electrica",
@@ -32,6 +36,26 @@ class InstrumentosChileScraper(BaseStore):
         session = get_scraper_session()
         urls: List[str] = []
 
+        # 1. Primary discovery: parse Bsale XML sitemap
+        try:
+            sitemap_url = urljoin(cls.website_url, "/sitemap.xml")
+            r = session.get(sitemap_url, timeout=25)
+            if r.status_code == 200 and r.content:
+                root = ET.fromstring(r.content)
+                for loc in root.findall(".//{http://www.sitemaps.org/schemas/sitemap/0.9}loc"):
+                    u = (loc.text or "").strip()
+                    if u and "/product/" in u:
+                        if u not in urls:
+                            urls.append(u)
+                            if limit and len(urls) >= limit:
+                                return urls
+        except Exception as e:
+            logger.warning(f"Error fetching Instrumentos Chile sitemap: {e}")
+
+        if urls:
+            return urls
+
+        # 2. Secondary fallback: crawl category collections
         for path in cls.category_paths:
             page = 1
             while True:
@@ -76,15 +100,35 @@ class InstrumentosChileScraper(BaseStore):
             if not h1:
                 return None
             name = h1.get_text().strip()
+            if not name:
+                return None
 
             price_tag = soup.select_one(".bs-product__final-price, .price, .product-price, [data-price]")
             price = cls.clean_price(price_tag.get_text()) if price_tag else Decimal("0")
+            if price <= 0:
+                return None
 
             # Extract SKU from URL or DOM
             key = url.rstrip("/").split("/")[-1]
             sku = None
             if "sku-" in key:
                 sku = key.split("sku-")[-1]
+
+            # Extract brand from Bsale brand markup, or infer from title
+            brand = cls.store_name
+            brand_el = soup.select_one(".bs-product-brand a, .product-brand a")
+            if brand_el:
+                brand_cand = brand_el.get("title") or brand_el.get_text().strip()
+                if not brand_cand and brand_el.find("img"):
+                    brand_cand = brand_el.find("img").get("alt") or brand_el.find("img").get("title")
+                if brand_cand:
+                    brand = brand_cand.strip()
+
+            if brand == cls.store_name:
+                for b in ["Fender", "Gibson", "Ibanez", "Yamaha", "Epiphone", "Cort", "Tagima", "Roland", "Boss", "Marshall", "Takamine", "Taylor", "Martin", "Casio", "Hohner", "Mollenhauer"]:
+                    if b.lower() in name.lower():
+                        brand = b
+                        break
 
             # Extract images (og:image, gallery, product images)
             imgs = []
@@ -108,12 +152,12 @@ class InstrumentosChileScraper(BaseStore):
                 key=key,
                 sku=sku,
                 part_number=sku,
-                brand="Instrumentos Chile",
+                brand=brand,
                 category="Guitarras y Bajos",
                 normal_price=price,
                 offer_price=price,
                 currency="CLP",
-                is_available=price > 0,
+                is_available=True,
                 picture_urls=imgs,
             )
         except Exception:
