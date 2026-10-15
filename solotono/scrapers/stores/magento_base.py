@@ -76,11 +76,31 @@ class MagentoBaseStore(BaseStore):
 
             soup = BeautifulSoup(r.text, "html.parser")
             
+            # Extract specs table / attributes if present (common in Magento)
+            specs = {}
+            for tr in soup.select("table tr"):
+                tds = tr.find_all(["th", "td"])
+                if len(tds) >= 2:
+                    k = tds[0].get_text(strip=True).rstrip(":").lower()
+                    v = tds[1].get_text(strip=True)
+                    if k and v and k not in specs:
+                        specs[k] = v
+            for dl in soup.select("dl"):
+                for dt, dd in zip(dl.find_all("dt"), dl.find_all("dd")):
+                    k = dt.get_text(strip=True).rstrip(":").lower()
+                    v = dd.get_text(strip=True)
+                    if k and v and k not in specs:
+                        specs[k] = v
+
+            spec_model = specs.get("nombre del modelo") or specs.get("modelo") or specs.get("product name")
+            spec_mpn = specs.get("número del modelo") or specs.get("numero del modelo") or specs.get("part number") or specs.get("mpn") or specs.get("código") or specs.get("codigo")
+            spec_color = specs.get("color") or specs.get("acabado")
+
             # 1. Try JSON-LD first (standard in Magento 2)
             json_ld = cls.parse_json_ld(soup)
             if json_ld:
                 name = json_ld.get("name", "")
-                sku = json_ld.get("sku")
+                sku = json_ld.get("sku") or spec_mpn
                 brand_data = json_ld.get("brand", {})
                 brand = brand_data.get("name") if isinstance(brand_data, dict) else str(brand_data)
                 
@@ -101,16 +121,27 @@ class MagentoBaseStore(BaseStore):
                     if og_img and og_img.get("content"):
                         images = [og_img["content"].strip()]
 
-                if name and price > 0:
+                final_brand = brand or cls.store_name
+                if final_brand.endswith(" Chile"):
+                    final_brand = final_brand[:-6].strip()
+                final_name = name
+                if spec_model:
+                    final_name = spec_model
+                    if final_brand and not final_name.lower().startswith(final_brand.lower()):
+                        final_name = f"{final_brand} {final_name}"
+                elif spec_color and spec_color.lower() not in final_name.lower():
+                    final_name = f"{final_name} {spec_color}"
+
+                if final_name and price > 0:
                     return ScrapedProduct(
-                        name=name,
+                        name=final_name,
                         store_slug=cls.store_slug,
                         url=url,
-                        key=sku or url.split("/")[-1].replace(".html", ""),
-                        sku=sku,
-                        part_number=sku,
+                        key=spec_mpn or sku or url.split("/")[-1].replace(".html", ""),
+                        sku=sku or spec_mpn,
+                        part_number=spec_mpn or sku,
                         ean=json_ld.get("gtin13") or json_ld.get("gtin") or None,
-                        brand=brand or cls.store_name,
+                        brand=final_brand,
                         category="Instrumentos",
                         normal_price=price,
                         offer_price=price,
@@ -124,9 +155,16 @@ class MagentoBaseStore(BaseStore):
 
             # 2. Fallback to HTML DOM parsing
             title_tag = soup.select_one("h1.page-title, .product-info-main h1, .product-name h1, h1")
-            if not title_tag:
+            if not title_tag and not spec_model:
                 return None
-            name = title_tag.get_text().strip()
+            name = spec_model or (title_tag.get_text().strip() if title_tag else "")
+            brand = cls.store_name
+            if brand.endswith(" Chile"):
+                brand = brand[:-6].strip()
+            if brand and not name.lower().startswith(brand.lower()):
+                name = f"{brand} {name}"
+            if spec_color and spec_color.lower() not in name.lower():
+                name = f"{name} {spec_color}"
 
             # Prices
             price_tag = soup.select_one(".special-price .price, .price-box .price, [data-price-type='finalPrice'] .price, .regular-price .price")
@@ -140,7 +178,7 @@ class MagentoBaseStore(BaseStore):
 
             # SKU
             sku_tag = soup.select_one(".product.attribute.sku .value, [itemprop='sku']")
-            sku = sku_tag.get_text().strip() if sku_tag else None
+            sku = spec_mpn or (sku_tag.get_text().strip() if sku_tag else None)
 
             # Stock
             stock_tag = soup.select_one(".stock.available, .stock.unavailable")
@@ -173,10 +211,10 @@ class MagentoBaseStore(BaseStore):
                 name=name,
                 store_slug=cls.store_slug,
                 url=url,
-                key=sku or url.split("/")[-1].replace(".html", ""),
-                sku=sku,
-                part_number=sku,
-                brand=cls.store_name,
+                key=spec_mpn or sku or url.split("/")[-1].replace(".html", ""),
+                sku=sku or spec_mpn,
+                part_number=spec_mpn or sku,
+                brand=brand,
                 category="Instrumentos",
                 normal_price=normal_price,
                 offer_price=offer_price,

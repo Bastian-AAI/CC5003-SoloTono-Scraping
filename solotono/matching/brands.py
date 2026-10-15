@@ -36,17 +36,58 @@ KNOWN_BRANDS = [
     "Alesis",
     # DJ & Lighting
     "Pioneer DJ", "Pioneer", "Denon DJ", "Numark", "Hercules", "Chauvet", "Eastman", "Tecshow",
+    "Electro-Voice", "EV",
 ]
+
+
+BRAND_CANONICAL: dict[str, str] = {
+    "audiotechnica": "Audio-Technica",
+    "audio technica": "Audio-Technica",
+    "tc electronic": "TC Electronic",
+    "tc-electronic": "TC Electronic",
+    "daddario": "D'Addario",
+    "d'addario": "D'Addario",
+    "ernie ball": "Ernie Ball",
+    "ernieball": "Ernie Ball",
+    "electro harmonix": "Electro-Harmonix",
+    "electro-harmonix": "Electro-Harmonix",
+    "ehx": "Electro-Harmonix",
+    "electro-voice": "Electro-Voice",
+    "electrovoice": "Electro-Voice",
+    "ev": "Electro-Voice",
+    "jhs": "JHS Pedals",
+    "jhs pedals": "JHS Pedals",
+    "eqd": "EarthQuaker Devices",
+    "earthquaker devices": "EarthQuaker Devices",
+    "neural dsp": "Neural DSP",
+    "walrus audio": "Walrus Audio",
+    "rode": "Rode",
+    "røde": "Rode",
+    "universal audio": "Universal Audio",
+    "uad": "Universal Audio",
+    "presonus": "PreSonus",
+    "solid state logic": "Solid State Logic",
+    "ssl": "Solid State Logic",
+    "behringerxeny": "Behringer",
+}
 
 
 def detect_brand(text: str) -> Optional[str]:
     """Detect and return canonical brand name from title or description."""
     if not text:
         return None
+    import re
     lower_text = f" {text.lower()} "
+    for alias, canonical in BRAND_CANONICAL.items():
+        if f" {alias} " in lower_text or re.search(r"\b" + re.escape(alias) + r"\b", lower_text):
+            return canonical
+        if len(alias) >= 6 and alias in lower_text:
+            return canonical
+
     for brand in KNOWN_BRANDS:
-        # Check whole word boundary
-        pattern = f" {brand.lower()} "
-        if pattern in lower_text or lower_text.startswith(f"{brand.lower()} ") or lower_text.endswith(f" {brand.lower()}"):
+        b_low = brand.lower()
+        if f" {b_low} " in lower_text or re.search(r"\b" + re.escape(b_low) + r"\b", lower_text):
+            return brand
+        if len(b_low) >= 6 and b_low in lower_text:
             return brand
     return None
