@@ -30,7 +30,7 @@ USER_AGENT = os.getenv(
 
 # Product Matching thresholds
 MATCH_EXACT_BOOST = 1.0
-MATCH_FUZZY_THRESHOLD = float(os.getenv("MATCH_FUZZY_THRESHOLD", "0.85"))
+MATCH_FUZZY_THRESHOLD = float(os.getenv("MATCH_FUZZY_THRESHOLD", "0.90"))
 MATCH_PENDING_THRESHOLD = float(os.getenv("MATCH_PENDING_THRESHOLD", "0.60"))
 AUTO_CREATE_CANONICAL = os.getenv("AUTO_CREATE_CANONICAL", "true").lower() in ("true", "1", "yes")
 

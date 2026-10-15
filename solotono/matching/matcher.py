@@ -1,5 +1,6 @@
 """Product Matching Engine for SoloTono, implementing SoloTodo's 3-stage entity association."""
 
+import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from rapidfuzz import fuzz
@@ -57,11 +58,12 @@ class ProductMatcher:
         norm_model = analysis["normalized_model"]
 
         # =========================================================================
-        # Stage 1: Exact Match (MPN or EAN)
+        # Stage 1: Exact Match (MPN or EAN) - Only across DIFFERENT stores
         # =========================================================================
         if mpn and len(mpn) >= 4:
             exact_by_mpn = self.session.query(Product).filter(Product.part_number == mpn).first()
-            if exact_by_mpn:
+            # Store Exclusivity: Candidate cannot already contain an entity from the same store!
+            if exact_by_mpn and not any(e.store_id == entity.store_id for e in exact_by_mpn.entities):
                 entity.product_id = exact_by_mpn.id
                 entity.is_associated = True
                 self._propagate_image(exact_by_mpn, entity)
@@ -75,7 +77,8 @@ class ProductMatcher:
 
         if ean and len(ean) >= 8:
             exact_by_ean = self.session.query(Product).filter(Product.ean == ean).first()
-            if exact_by_ean:
+            # Store Exclusivity: Candidate cannot already contain an entity from the same store!
+            if exact_by_ean and not any(e.store_id == entity.store_id for e in exact_by_ean.entities):
                 entity.product_id = exact_by_ean.id
                 entity.is_associated = True
                 self._propagate_image(exact_by_ean, entity)
@@ -88,24 +91,87 @@ class ProductMatcher:
                 )
 
         # =========================================================================
-        # Stage 2: Semantic Fuzzy Token Matching
+        # Stage 2: Semantic Fuzzy Token Matching (CROSS-STORE ONLY)
         # =========================================================================
         query = self.session.query(Product)
         if brand:
-            # Filter candidates by matching brand to prevent cross-brand false positives
-            query = query.filter(Product.brand.ilike(f"%{brand}%"))
+            # Filter candidates by matching brand (flexible punctuation to bridge e.g. Electro-Voice vs Electrovoice)
+            clean_b = re.sub(r"[^a-zA-Z0-9]+", "%", brand).strip("%")
+            query = query.filter(Product.brand.ilike(f"%{clean_b}%"))
         candidates = query.all()
+
+        # STORE EXCLUSIVITY: A store does not match against its own products.
+        # Exclude any canonical product that already has an offer from entity.store_id!
+        candidates = [
+            c for c in candidates
+            if not any(e.store_id == entity.store_id for e in c.entities)
+        ]
 
         scored_candidates: List[Tuple[Product, float]] = []
         for cand in candidates:
-            cand_norm = analyze_product_string(cand.name, raw_brand=cand.brand)["normalized_model"]
+            cand_analysis = analyze_product_string(cand.name, raw_brand=cand.brand, sku=cand.part_number)
+            cand_norm = cand_analysis["normalized_model"]
             if not norm_model or not cand_norm:
                 continue
 
-            # Token sort ratio handles word order variations
+            # 1. Hard Disjunction: Series conflict (e.g. Ultra vs Vintage vs Professional vs Player)
+            cand_series = cand_analysis["series_tokens"]
+            ent_series = analysis["series_tokens"]
+            if cand_series and ent_series and not cand_series.intersection(ent_series):
+                continue
+
+            # 2. Hard Disjunction: Year conflict (e.g. 1957 vs 1960 or vintage year in one but absent in other)
+            cand_years = cand_analysis["year_tokens"]
+            ent_years = analysis["year_tokens"]
+            if (cand_years or ent_years) and cand_years != ent_years:
+                continue
+
+            # 3. Hard Disjunction: Finish / Color conflict (e.g. Sinister Red vs Solar Flare)
+            cand_f = cand_analysis["finish"].lower() if cand_analysis["finish"] else None
+            ent_f = analysis["finish"].lower() if analysis["finish"] else None
+            if (cand_f is not None or ent_f is not None) and (cand_f != ent_f):
+                continue
+
+            # 4. Hard Disjunction: Alphanumeric Model Code conflict (e.g. M50X vs M20X, UM2 vs UMC22, CT-S400 vs CT-S100, 114CE vs 24CE)
+            cand_codes = cand_analysis["model_codes"]
+            ent_codes = analysis["model_codes"]
+            if cand_codes and ent_codes and not cand_codes.intersection(ent_codes):
+                continue
+
+            # 5. Hard Disjunction: Fretboard Wood conflict (e.g. Maple vs Rosewood)
+            cand_wood = cand_analysis.get("fretboard")
+            ent_wood = analysis.get("fretboard")
+            if cand_wood and ent_wood and cand_wood != ent_wood:
+                continue
+
+            # 6. Hard Disjunction: Pickup Configuration conflict (e.g. HSS vs SSS)
+            cand_pu = cand_analysis.get("pickup_config")
+            ent_pu = analysis.get("pickup_config")
+            if cand_pu and ent_pu and cand_pu != ent_pu:
+                continue
+
+            # 7. Hard Disjunction: Size / Fractional / Inch dimension conflict (e.g. 3/4 vs 4/4, 15" vs 12")
+            cand_size = cand_analysis.get("size_spec")
+            ent_size = analysis.get("size_spec")
+            if cand_size and ent_size and cand_size != ent_size:
+                continue
+
+            # 8. Hard Disjunction: Multi-pack quantity conflict (e.g. Pack of 5 vs Single item)
+            cand_pack = cand_analysis.get("pack_qty")
+            ent_pack = analysis.get("pack_qty")
+            if (cand_pack or ent_pack) and cand_pack != ent_pack:
+                continue
+
+            # Token sort ratio strictly penalizes extraneous and missing tokens
             score_sort = fuzz.token_sort_ratio(norm_model, cand_norm)
-            score_set = fuzz.token_set_ratio(norm_model, cand_norm)
-            score = max(score_sort, score_set) / 100.0
+            base_score = score_sort / 100.0
+
+            # If alphanumeric model codes match explicitly (e.g. both '1204usb' or both 'xs1') and zero conflicts,
+            # require baseline token similarity >= 0.70 to avoid accidental short-code collisions:
+            if cand_codes and ent_codes and cand_codes.intersection(ent_codes) and base_score >= 0.70:
+                score = max(base_score, 0.95)
+            else:
+                score = base_score
 
             if score >= self.pending_threshold:
                 scored_candidates.append((cand, score))
@@ -143,8 +209,7 @@ class ProductMatcher:
         # Auto-create Canonical Product (if requested and brand is known)
         # =========================================================================
         if auto_create_canonical and brand:
-            # Clean title for canonical catalog
-            canonical_name = entity.name.replace("®", "").replace("™", "").strip()
+            canonical_name = analysis.get("clean_title") or entity.name.replace("®", "").replace("™", "").strip()
             tax_res = classify_product(canonical_name, raw_category=entity.category, brand=brand, session=self.session)
 
             new_prod = Product(
