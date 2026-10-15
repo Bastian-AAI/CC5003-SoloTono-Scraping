@@ -86,12 +86,14 @@ def cmd_scrape(args):
         table.add_column("Historiales", justify="right")
         table.add_column("Asociados", justify="right")
 
+        effective_limit = None if (getattr(args, "all", False) or (args.limit is not None and args.limit <= 0)) else args.limit
+
         for slug in slugs:
             scraper_cls = get_scraper_by_slug(slug)
             with Progress(SpinnerColumn(), TextColumn(f"[bold blue]Scrapeando {scraper_cls.store_name}..."), transient=True) as progress:
                 progress.add_task("scrape", total=None)
                 try:
-                    products = scraper_cls.scrape_all(limit=args.limit)
+                    products = scraper_cls.scrape_all(limit=effective_limit)
                     stats = pipeline.process_scraped_products(products)
                     table.add_row(
                         scraper_cls.store_name,
@@ -449,7 +451,8 @@ def main():
     # Command: scrape
     p_scrape = subparsers.add_parser("scrape", help="Ejecutar scraping de tiendas")
     p_scrape.add_argument("--store", type=str, default=None, help="Slug de tienda específica")
-    p_scrape.add_argument("--limit", type=int, default=10, help="Límite de productos a extraer")
+    p_scrape.add_argument("--limit", type=int, default=10, help="Límite de productos a extraer (0 para sin límite)")
+    p_scrape.add_argument("--all", action="store_true", help="Extraer el catálogo completo de las tiendas sin límite")
     p_scrape.add_argument("--auto-match", action="store_true", default=True, help="Ejecutar matching automático al guardar")
     p_scrape.add_argument("--auto-create", action="store_true", default=True, help="Crear producto canónico si no existe")
 

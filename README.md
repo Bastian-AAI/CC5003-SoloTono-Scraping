@@ -317,16 +317,30 @@ python -m solotono stats
 ```
 
 ### 5. Ejecutar Scraping Específico o Masivo
-- Scrapear una tienda individual (ej. Audiomusica):
+- Scrapear una tienda individual de muestra (ej. Audiomusica):
   ```bash
   python -m solotono scrape --store audiomusica --limit 20
   ```
-- Scrapear todas las tiendas:
+- Scrapear el catálogo completo sin límite de una tienda (`--all`):
   ```bash
-  python -m solotono scrape --limit 10
+  python -m solotono scrape --store fender --all
+  ```
+- Scrapear todas las tiendas sin límite de productos:
+  ```bash
+  python -m solotono scrape --all
   ```
 
-### 6. Ejecutar el Motor de Product Matching
+### 6. Automatización Periódica del Inventario (Cron)
+Para mantener los precios y stock sincronizados de manera desatendida, ejecutar o programar el script:
+```bash
+./cron_sync.sh
+```
+O programarlo en `crontab -e`:
+```cron
+0 */6 * * * /ruta/al/proyecto/scraper/cron_sync.sh
+```
+
+### 7. Ejecutar el Motor de Product Matching
 Procesa las entidades que están en la cola de pendientes:
 ```bash
 python -m solotono match --threshold 0.85
